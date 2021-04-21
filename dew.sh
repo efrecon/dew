@@ -127,6 +127,7 @@ fi
 
 cmd="docker run \
       --rm \
+      --init \
       -v "${DEW_SOCK}:${DEW_SOCK}" \
       -v $(pwd):$(pwd) \
       -w $(pwd) \
@@ -150,8 +151,9 @@ if [ "$#" -gt 1 ]; then
 else
   cmd="$cmd \
         -it \
+        -a stdin -a stdout -a stderr \
         --entrypoint /bin/sh \
-        $1 -c 'bash || ash || sh'"
+        $1 -c 'bash || ash || sh; exit'"
 fi
 
 if [ "$DEW_DOCKER" = "1" ]; then
