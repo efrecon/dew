@@ -122,6 +122,12 @@ while [ $# -gt 0 ]; do
       # shellcheck disable=2034 # Comes from log module
       DEW_OPTS="${1#*=}"; shift 1;;
 
+    --shell)
+      DEW_SHELL=$2; shift 2;;
+    --shell=*)
+      # shellcheck disable=2034 # Comes from log module
+      DEW_SHELL="${1#*=}"; shift 1;;
+
     -v | --verbosity | --verbose)
       EFSL_VERBOSITY=$2; shift 2;;
     --verbosity=* | --verbose=*)
@@ -197,6 +203,7 @@ cmd="docker run \
       --rm \
       --init \
       --network host \
+      -v /etc/localtime:/etc/localtime:ro \
       --name $DEW_NAME"
 
 # Mount UNIX domain docker socket into container, if relevant
@@ -246,10 +253,18 @@ if [ "$#" -gt 1 ]; then
   shift
   cmd="$cmd $DEW_IMAGE $*"
 elif [ -n "$DEW_SHELL" ]; then
-  cmd="$cmd \
-        -it \
-        -a stdin -a stdout -a stderr \
-        --entrypoint ${DEW_SHELL}"
+  if [ "$DEW_SHELL" = "-" ]; then
+    cmd="$cmd \
+          -it \
+          -a stdin -a stdout -a stderr \
+          $DEW_IMAGE"
+  else
+    cmd="$cmd \
+          -it \
+          -a stdin -a stdout -a stderr \
+          --entrypoint ${DEW_SHELL} \
+          $DEW_IMAGE"
+  fi
 else
   cmd="$cmd \
         -it \
