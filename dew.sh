@@ -7,19 +7,20 @@ set -eu
 # Find out where dependent modules are and load them at once before doing
 # anything. This is to be able to use their services as soon as possible.
 
-# Build a default colon separated INSTALL_LIBPATH using the root directory to
-# look for modules that we depend on. INSTALL_LIBPATH can be set from the outside
-# to facilitate location.
-INSTALL_ROOTDIR=$( cd -P -- "$(dirname -- "$(command -v -- "$0")")" && pwd -P )
-INSTALL_LIBPATH=${INSTALL_LIBPATH:-${INSTALL_ROOTDIR}/lib}
+# Build a default colon separated DEW_LIBPATH using the root directory to look
+# for modules that we depend on. DEW_LIBPATH can be set from the outside to
+# facilitate location. Note that this only works when there is support for
+# readlink -f, see https://github.com/ko1nksm/readlinkf for a POSIX alternative.
+DEW_ROOTDIR=$( cd -P -- "$(dirname -- "$(command -v -- "$(readlink -f "$0")")")" && pwd -P )
+DEW_LIBPATH=${DEW_LIBPATH:-${DEW_ROOTDIR}/lib}
 
-# Look for modules passed as parameters in the INSTALL_LIBPATH and source them.
+# Look for modules passed as parameters in the DEW_LIBPATH and source them.
 # Modules are required so fail as soon as it was not possible to load a module
 module() {
   for module in "$@"; do
     OIFS=$IFS
     IFS=:
-    for d in $INSTALL_LIBPATH; do
+    for d in $DEW_LIBPATH; do
       if [ -f "${d}/${module}.sh" ]; then
         # shellcheck disable=SC1090
         . "${d}/${module}.sh"
@@ -28,7 +29,7 @@ module() {
       fi
     done
     if [ "$IFS" = ":" ]; then
-      echo "Cannot find module $module in $INSTALL_LIBPATH !" >& 2
+      echo "Cannot find module $module in $DEW_LIBPATH !" >& 2
       exit 1
     fi
   done
@@ -75,9 +76,9 @@ DEW_MOUNT=${DEW_MOUNT:-1}
 # Additional options blindly passed to the docker run command.
 DEW_OPTS=${DEW_OPTS:-}
 
-# This is not exported. It is only used internally to trigger docker client
-# download and injection.
-__DEW_INJECT=0
+# Shell to execute for interactive command. When empty, the default, several
+# shells will be tried in turns.
+DEW_SHELL=${DEW_SHELL:-}
 
 # Version of the docker client to download
 DEW_DOCKER_VERSION=20.10.6
@@ -106,9 +107,6 @@ while [ $# -gt 0 ]; do
 
     -d | --docker)
       DEW_DOCKER=1; shift;;
-
-    --inject)
-      __DEW_INJECT=1; shift;;
 
     --name)
       DEW_NAME=$2; shift 2;;
@@ -141,34 +139,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# When required to inject, we will wait for the container which name is passed
-# as an argument exists and is running, and once done, we will download and
-# install the docker client in the container. Usually, this makes little sense
-# if you have not passed the local docker socket to the container.
-if [ "$__DEW_INJECT" = "1" ]; then
-  [ -z "$DEW_NAME" ] && die "You NEED to provide a name where to inject docker!"
-  while true; do
-    if docker ps --format '{{.Names}}'|grep -q "$DEW_NAME"; then
-      break
-    fi
-    log_trace "Still waiting for $DEW_NAME container to be created"
-    sleep 1
-  done
-
-  tmpdir=$(docker exec -u 0 "$DEW_NAME" mktemp -d)
-  log_debug "Downloading Docker v$DEW_DOCKER_VERSION in $tmpdir and installing at /usr/local/bin"
-  docker exec -u 0 "$DEW_NAME" wget -q -O "${tmpdir}/docker.tgz" https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz
-  docker exec -u 0 "$DEW_NAME" tar -C "$tmpdir" -xf "${tmpdir}/docker.tgz"
-  docker exec -u 0 "$DEW_NAME" mv "${tmpdir}/docker/docker" /usr/local/bin/
-  docker exec -u 0 "$DEW_NAME" rm -rf "$tmpdir"
-  exit
-fi
-
 if [ "$#" = 0 ]; then
   die "You must at least provide the name of an image"
 fi
 
-# ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
+download() {
+  if command -v curl >/dev/null; then
+    curl -sSL -o "${2:-$(basename "$1")}" "$1"
+  elif command -v wget >/dev/null; then
+    wget -q -O "${2:-$(basename "$1")}" "$1"
+  fi
+}
 
 if [ "$DEW_DOCKER" = "1" ]; then
   if ! [ -d "${XDG_CACHE_HOME}/dew" ]; then
@@ -178,6 +159,9 @@ if [ "$DEW_DOCKER" = "1" ]; then
   if ! [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
     log_notice "Downloading Docker client v$DEW_DOCKER_VERSION"
     tmpdir=$(mktemp -d)
+    download \
+      "https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz" \
+      "${tmpdir}/docker.tgz"
     wget -q -O "${tmpdir}/docker.tgz" https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz
     tar -C "$tmpdir" -xf "${tmpdir}/docker.tgz"
     mv "${tmpdir}/docker/docker" "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION"
@@ -187,6 +171,7 @@ fi
 
 # Cut out the possible tag/sha256 at the end of the image name and extract the
 # main name to be used as part of the automatically generated container name.
+# ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
 bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$~~')")
 [ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
 DEW_IMAGE=$1
@@ -260,12 +245,17 @@ fi
 if [ "$#" -gt 1 ]; then
   shift
   cmd="$cmd $DEW_IMAGE $*"
+elif [ -n "$DEW_SHELL" ]; then
+  cmd="$cmd \
+        -it \
+        -a stdin -a stdout -a stderr \
+        --entrypoint ${DEW_SHELL}"
 else
   cmd="$cmd \
         -it \
         -a stdin -a stdout -a stderr \
         --entrypoint /bin/sh \
-        $DEW_IMAGE -c 'bash || ash || sh; exit'"
+        $DEW_IMAGE -c '{ bash && exit; } || { ash && exit; } || { sh && exit; }'"
 fi
 
 log_trace "Running: $cmd"
