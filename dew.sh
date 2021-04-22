@@ -37,18 +37,49 @@ module() {
 # Source in all relevant modules. This is where most of the "stuff" will occur.
 module log
 
+# Arrange so we know where user settings are on this system.
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME}/.config}
+
+# Arrange so we know where the user cache is on this system.
+XDG_CACHE_HOME=${XDG_CACHE_HOME:-${HOME}/.cache}
+
+# Location of the directory where we can store shortcut to environments that are
+# important to us.
+DEW_CONFIG=${DEW_CONFIG:-${XDG_CONFIG_HOME}/dew}
+
+# Location of the docker socket. When empty, it will not be passed further
 DEW_SOCK=${DEW_SOCK:-/var/run/docker.sock}
 
+# Comma separated list of environment variable names that will automatically be
+# ignored in the destination container.
 DEW_BLACKLIST=${DEW_BLACKLIST:-SSH_AUTH_SOCK,TMPDIR,PATH}
 
+# Should we impersonate the user in the container, i.e. run with the same used
+# id (and group).
 DEW_IMPERSONATE=${DEW_IMPERSONATE:-1}
 
+# Should we inject the docker client in the destination container
 DEW_DOCKER=${DEW_DOCKER:-0}
 
+# This is the name for the container to create, when empty, the default, a name
+# will be generated out of the image used for the container to ease recognition.
 DEW_NAME=${DEW_NAME:-}
 
-DEW_INJECT=${DEW_INJECT:-0}
+# Should we mount the current directory at the same location inside the
+# destination container. In addition, when the mount is created, the working
+# directory will be set to the mounted directory. When doing this, it is usually
+# a good idea to impersonate the user to arrange for file permissions to be
+# right.
+DEW_MOUNT=${DEW_MOUNT:-1}
 
+# Additional options blindly passed to the docker run command.
+DEW_OPTS=${DEW_OPTS:-}
+
+# This is not exported. It is only used internally to trigger docker client
+# download and injection.
+__DEW_INJECT=0
+
+# Version of the docker client to download
 DEW_DOCKER_VERSION=20.10.6
 
 # shellcheck disable=2034 # Usage string is used by log module on errors
@@ -77,12 +108,21 @@ while [ $# -gt 0 ]; do
       DEW_DOCKER=1; shift;;
 
     --inject)
-      DEW_INJECT=1; shift;;
+      __DEW_INJECT=1; shift;;
 
     --name)
       DEW_NAME=$2; shift 2;;
     --name=*)
       DEW_NAME="${1#*=}"; shift 1;;
+
+    --no-mount)
+      DEW_MOUNT=0; shift;;
+
+    -o | --opts | --options)
+      DEW_OPTS=$2; shift 2;;
+    --opts=* | --options=*)
+      # shellcheck disable=2034 # Comes from log module
+      DEW_OPTS="${1#*=}"; shift 1;;
 
     -v | --verbosity | --verbose)
       EFSL_VERBOSITY=$2; shift 2;;
@@ -101,9 +141,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -z "$DEW_NAME" ] && DEW_NAME="dew_$$"
-
-if [ "$DEW_INJECT" = "1" ]; then
+# When required to inject, we will wait for the container which name is passed
+# as an argument exists and is running, and once done, we will download and
+# install the docker client in the container. Usually, this makes little sense
+# if you have not passed the local docker socket to the container.
+if [ "$__DEW_INJECT" = "1" ]; then
+  [ -z "$DEW_NAME" ] && die "You NEED to provide a name where to inject docker!"
   while true; do
     if docker ps --format '{{.Names}}'|grep -q "$DEW_NAME"; then
       break
@@ -125,15 +168,72 @@ if [ "$#" = 0 ]; then
   die "You must at least provide the name of an image"
 fi
 
+# ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
+
+if [ "$DEW_DOCKER" = "1" ]; then
+  if ! [ -d "${XDG_CACHE_HOME}/dew" ]; then
+    log_info "Creating local cache for Docker client binaries"
+    mkdir -p "${XDG_CACHE_HOME}/dew"
+  fi
+  if ! [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
+    log_notice "Downloading Docker client v$DEW_DOCKER_VERSION"
+    tmpdir=$(mktemp -d)
+    wget -q -O "${tmpdir}/docker.tgz" https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz
+    tar -C "$tmpdir" -xf "${tmpdir}/docker.tgz"
+    mv "${tmpdir}/docker/docker" "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION"
+    rm -rf "$tmpdir"
+  fi
+fi
+
+# Cut out the possible tag/sha256 at the end of the image name and extract the
+# main name to be used as part of the automatically generated container name.
+bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$~~')")
+[ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
+DEW_IMAGE=$1
+
+# Read configuration file for the first parameter
+if [ -d "$DEW_CONFIG" ]; then
+  if [ -f "${DEW_CONFIG}/$1" ]; then
+    if [ -n "$(grep -Ev '^DEW_[A-Z_]+=' "${DEW_CONFIG}/$1" | grep -Ev '^[[:space:]]*$' | grep -Ev '^#')" ]; then
+      log_error "Configuration file at ${DEW_CONFIG}/$1 contains more than dew-specific configuration"
+    else
+      # shellcheck disable=SC1090 # The whole point is to have it dynamic!
+      . "${DEW_CONFIG}/$1"
+    fi
+  fi
+fi
+
+log_trace "Kickstarting a container based on $DEW_IMAGE"
+
+# The base command is to arrange for the container to automatically be removed
+# once stopped, to add an init system to make sure we can capture signals and to
+# share the host network.
 cmd="docker run \
       --rm \
       --init \
-      -v "${DEW_SOCK}:${DEW_SOCK}" \
-      -v $(pwd):$(pwd) \
-      -w $(pwd) \
       --network host \
       --name $DEW_NAME"
 
+# Mount UNIX domain docker socket into container, if relevant
+if [ -n "$DEW_SOCK" ]; then
+  cmd="$cmd -v "${DEW_SOCK}:${DEW_SOCK}""
+fi
+
+# Automatically mount the current directory and make it the current directory
+# inside the container as well.
+if [ "$DEW_MOUNT" = "1" ]; then
+  cmd="$cmd \
+        -v $(pwd):$(pwd) \
+        -w $(pwd)"
+fi
+
+# Add blindly any options
+if [ -n "$DEW_OPTS" ]; then
+  cmd="$cmd $DEW_OPTS"
+fi
+
+# When impersonating the user arrange for the container to be running with the
+# same user and group id, and pass all environment variables that should be.
 if [ "$DEW_IMPERSONATE" = "1" ]; then
   cmd="$cmd --user $(id -u):$(id -g)"
   vars=$(env | grep -oE '^[A-Z][A-Z0-9_]*=' | sed 's/=$//g')
@@ -146,18 +246,27 @@ if [ "$DEW_IMPERSONATE" = "1" ]; then
   done
 fi
 
+# If requested to have the docker client, download it if necessary and mount it
+# under /usr/local/bin inside the container.
+if [ "$DEW_DOCKER" = "1" ]; then
+  if [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
+    cmd="$cmd -v ${XDG_CACHE_HOME}/dew/docker_${DEW_DOCKER_VERSION}:/usr/local/bin/docker:ro"
+  else
+    log_notice "Scheduling Docker client injection in the background"
+    "$0" --name "$DEW_NAME" --inject &
+  fi
+fi
+
 if [ "$#" -gt 1 ]; then
-  cmd="$cmd $*"
+  shift
+  cmd="$cmd $DEW_IMAGE $*"
 else
   cmd="$cmd \
         -it \
         -a stdin -a stdout -a stderr \
         --entrypoint /bin/sh \
-        $1 -c 'bash || ash || sh; exit'"
+        $DEW_IMAGE -c 'bash || ash || sh; exit'"
 fi
 
-if [ "$DEW_DOCKER" = "1" ]; then
-  log_notice "Scheduling Docker client injection in the background"
-  "$0" --name "$DEW_NAME" --inject --verbose "$EFSL_VERBOSITY" &
-fi
+log_trace "Running: $cmd"
 eval "$cmd"
