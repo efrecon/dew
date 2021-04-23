@@ -13,7 +13,8 @@ This scripts takes some inspiration from [lope] with the addition of being able
 to read configurations for known environments. This minimises typing and
 automates all the necessary command-line options for making a given environment
 possible. Configurations are simply `env` files placed in a sub-directory of the
-`$XDG_CONFIG_HOME` directory.
+`$XDG_CONFIG_HOME` directory, or under the [`config`](./config/) directory of
+this repository.
 
   [lope]: https://github.com/Crazybus/lope
 
