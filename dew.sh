@@ -44,9 +44,10 @@ XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME}/.config}
 # Arrange so we know where the user cache is on this system.
 XDG_CACHE_HOME=${XDG_CACHE_HOME:-${HOME}/.cache}
 
-# Location of the directory where we can store shortcut to environments that are
-# important to us.
-DEW_CONFIG=${DEW_CONFIG:-${XDG_CONFIG_HOME}/dew}
+# Location of the directories where we can store shortcut to environments that
+# are important to us. The default is the config directory under this
+# repository, and the dew directory under the XDG configuration directory.
+DEW_CONFIG_PATH=${DEW_CONFIG_PATH:-"${XDG_CONFIG_HOME}/dew:${DEW_ROOTDIR}/config"}
 
 # Location of the docker socket. When empty, it will not be passed further
 DEW_SOCK=${DEW_SOCK:-/var/run/docker.sock}
@@ -81,7 +82,11 @@ DEW_OPTS=${DEW_OPTS:-}
 DEW_SHELL=${DEW_SHELL:-}
 
 # Version of the docker client to download
-DEW_DOCKER_VERSION=20.10.6
+DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-20.10.6}
+
+# Installation directory inside containers where we will inject stuff, whenever
+# relevant and necessary.
+DEW_INSTALLDIR=${DEW_INSTALLDIR:-/usr/local/bin}
 
 # shellcheck disable=2034 # Usage string is used by log module on errors
 EFSL_USAGE="
@@ -92,6 +97,10 @@ Usage:
   $EFSL_CMDNAME [-option arg] [--] img args...
   where all dash-led single options are as follows:
     -r | --root      Do not inpersonate user in container
+    -d | --docker    Inject Docker client into container
+    -o | --opt(ion)s Options blindly passed to docker run
+    --shell          Shell to run interactively, default is empty, meaning
+                     a good guess. Set to - to leave the entrypoint unchanged.
     -v | --verbosity One of: error, warn, notice, info, debug or trace
 
   The name of a docker image is a mandatory argument. When only a
@@ -122,7 +131,7 @@ while [ $# -gt 0 ]; do
       # shellcheck disable=2034 # Comes from log module
       DEW_OPTS="${1#*=}"; shift 1;;
 
-    --shell)
+    -s | --shell)
       DEW_SHELL=$2; shift 2;;
     --shell=*)
       # shellcheck disable=2034 # Comes from log module
@@ -149,6 +158,9 @@ if [ "$#" = 0 ]; then
   die "You must at least provide the name of an image"
 fi
 
+# Download the url passed as the first argument to the destination path passed
+# as a second argument. The destination will be the same as the basename of the
+# URL, in the current directory, if omitted.
 download() {
   if command -v curl >/dev/null; then
     curl -sSL -o "${2:-$(basename "$1")}" "$1"
@@ -157,6 +169,53 @@ download() {
   fi
 }
 
+# Checks that the configuration file passed as an argument is valid.
+check_config() {
+  test -z "$(grep -Ev '^DEW_[A-Z_]+=' "$1" | grep -Ev '^[[:space:]]*$' | grep -Ev '^#')"
+}
+
+# Output the path to the configuration file that should be used for the
+# container passed as argument if it exists and is valid. Empty string
+# otherwise.
+config() {
+  OFS=$IFS
+  IFS=:
+  for d in $DEW_CONFIG_PATH; do
+    log_trace "Looking for $1 in $d"
+    if [ -d "$d" ]; then
+      for f in "${d}/$1" "${d}/${1}.env"; do
+        if [ -f "$f" ]; then
+          if check_config "$f"; then
+            printf %s\\n "$f"
+            IFS=$OFS
+            return
+          else
+            log_error "Configuration file at $f contains more than dew-specific configuration"
+          fi
+        fi
+      done
+    fi
+  done
+  IFS=$OFS
+}
+
+# Cut out the possible tag/sha256 at the end of the image name and extract the
+# main name to be used as part of the automatically generated container name.
+# ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
+bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$~~')")
+[ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
+DEW_IMAGE=$1
+
+# Read configuration file for the first parameter
+DEW_CONFIG=$(config "$1")
+if [ -n "$DEW_CONFIG" ]; then
+  log_info "Reading configuration for $1 from $DEW_CONFIG"
+  # shellcheck disable=SC1090 # The whole point is to have it dynamic!
+  . "${DEW_CONFIG}"
+fi
+
+# Download Docker client at the version specified by DEW_DOCKER_VERSION into the
+# XDG cache so that it can be injected into the container.
 if [ "$DEW_DOCKER" = "1" ]; then
   if ! [ -d "${XDG_CACHE_HOME}/dew" ]; then
     log_info "Creating local cache for Docker client binaries"
@@ -175,25 +234,6 @@ if [ "$DEW_DOCKER" = "1" ]; then
   fi
 fi
 
-# Cut out the possible tag/sha256 at the end of the image name and extract the
-# main name to be used as part of the automatically generated container name.
-# ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
-bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$~~')")
-[ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
-DEW_IMAGE=$1
-
-# Read configuration file for the first parameter
-if [ -d "$DEW_CONFIG" ]; then
-  if [ -f "${DEW_CONFIG}/$1" ]; then
-    if [ -n "$(grep -Ev '^DEW_[A-Z_]+=' "${DEW_CONFIG}/$1" | grep -Ev '^[[:space:]]*$' | grep -Ev '^#')" ]; then
-      log_error "Configuration file at ${DEW_CONFIG}/$1 contains more than dew-specific configuration"
-    else
-      # shellcheck disable=SC1090 # The whole point is to have it dynamic!
-      . "${DEW_CONFIG}/$1"
-    fi
-  fi
-fi
-
 log_trace "Kickstarting a container based on $DEW_IMAGE"
 
 # The base command is to arrange for the container to automatically be removed
@@ -206,7 +246,10 @@ cmd="docker run \
       -v /etc/localtime:/etc/localtime:ro \
       --name $DEW_NAME"
 
-# Mount UNIX domain docker socket into container, if relevant
+# Mount UNIX domain docker socket into container, if relevant. Note in most
+# case, the user remapped into the container will also have access to the Docker
+# socket (you still have provide a CLI through injecting the Docker client with
+# -d)
 if [ -n "$DEW_SOCK" ]; then
   cmd="$cmd -v "${DEW_SOCK}:${DEW_SOCK}""
 fi
@@ -224,10 +267,9 @@ if [ -n "$DEW_OPTS" ]; then
   cmd="$cmd $DEW_OPTS"
 fi
 
-# When impersonating the user arrange for the container to be running with the
-# same user and group id, and pass all environment variables that should be.
+# When impersonating pass all environment variables that should be to the
+# container.
 if [ "$DEW_IMPERSONATE" = "1" ]; then
-  cmd="$cmd --user $(id -u):$(id -g)"
   vars=$(env | grep -oE '^[A-Z][A-Z0-9_]*=' | sed 's/=$//g')
   for v in $vars; do
     if printf %s\\n "$DEW_BLACKLIST" | grep -q "$v"; then
@@ -239,39 +281,97 @@ if [ "$DEW_IMPERSONATE" = "1" ]; then
 fi
 
 # If requested to have the docker client, download it if necessary and mount it
-# under /usr/local/bin inside the container.
+# under /usr/local/bin inside the container so it is accessible at the path and
+# the prompt (or other programs).
 if [ "$DEW_DOCKER" = "1" ]; then
   if [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
-    cmd="$cmd -v ${XDG_CACHE_HOME}/dew/docker_${DEW_DOCKER_VERSION}:/usr/local/bin/docker:ro"
-  else
-    log_notice "Scheduling Docker client injection in the background"
-    "$0" --name "$DEW_NAME" --inject &
+    cmd="$cmd -v ${XDG_CACHE_HOME}/dew/docker_${DEW_DOCKER_VERSION}:${DEW_INSTALLDIR%/}/docker:ro"
   fi
 fi
 
 if [ "$#" -gt 1 ]; then
+  # When we have specified arguments at the command line, we expect to be
+  # calling a program in a non-interactive manner. Elevate to the user if
+  # necessary and run
+  if [ "$DEW_IMPERSONATE" = "1" ]; then
+    cmd="$cmd --user $(id -u):$(id -g)"
+  fi
   shift
   cmd="$cmd $DEW_IMAGE $*"
 elif [ -n "$DEW_SHELL" ]; then
+  # If we have no other argument than a Docker image (or a configured argument),
+  # we behave a little differently when a specific shell is provided. When the
+  # shell is '-', then this is understood as "do as little modification as
+  # possible", so we just elevate to the user and run the image, with all
+  # default arguments (as in the combination of the entrypoint and the default
+  # set of arguments from the command).
   if [ "$DEW_SHELL" = "-" ]; then
+    if [ "$DEW_IMPERSONATE" = "1" ]; then
+      cmd="$cmd --user $(id -u):$(id -g)"
+    fi
     cmd="$cmd \
           -it \
           -a stdin -a stdout -a stderr \
           $DEW_IMAGE"
   else
+    # If the shell was specified, we understand this as trying to override the
+    # entrypoint. We become the same user as the one running dew, after having
+    # setup a minimial environment. This will run the specified shell with the
+    # proper privieges.
+    if [ "$DEW_IMPERSONATE" = "1" ]; then
+      cmd="$cmd \
+            -it \
+            -a stdin -a stdout -a stderr \
+            -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+            -e DEW_UID=$(id -u) \
+            -e DEW_GID=$(id -g) \
+            -e DEW_SHELL=$DEW_SHELL \
+            -e HOME=$HOME \
+            -e USER=$USER \
+            --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
+            $DEW_IMAGE"
+    else
+      cmd="$cmd \
+            -it \
+            -a stdin -a stdout -a stderr \
+            -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+            -e DEW_SHELL=$DEW_SHELL \
+            --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
+            $DEW_IMAGE"
+    fi
+  fi
+else
+  # If nothing at all was specified, we will run a shell under the proper
+  # privileges, i.e. inside an encapsulated environment, minimally mimicing the
+  # current user.
+  if [ "$DEW_IMPERSONATE" = "1" ]; then
     cmd="$cmd \
           -it \
           -a stdin -a stdout -a stderr \
-          --entrypoint ${DEW_SHELL} \
+          -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+          -e DEW_UID=$(id -u) \
+          -e DEW_GID=$(id -g) \
+          -e HOME=$HOME \
+          -e USER=$USER \
+          --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
+          $DEW_IMAGE"
+  else
+    cmd="$cmd \
+          -it \
+          -a stdin -a stdout -a stderr \
+          -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+          --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
           $DEW_IMAGE"
   fi
-else
-  cmd="$cmd \
-        -it \
-        -a stdin -a stdout -a stderr \
-        --entrypoint /bin/sh \
-        $DEW_IMAGE -c '{ bash && exit; } || { ash && exit; } || { sh && exit; }'"
 fi
 
+# Trace the entire set of variables that were used for taking decisions,
+# together with the Docker command that we are going to execute.
+set | grep "^DEW_" | while IFS= read -r line; do
+  log_trace "$line"
+done
 log_trace "Running: $cmd"
+
+# Now run the docker command. We evaluate to be able to replace variables by
+# their values.
 eval "$cmd"
