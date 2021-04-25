@@ -75,7 +75,7 @@ have arranged for the impersonated user within the container to be a member of
 the `docker` group, under the same ID as the local `docker` group as associated
 to the UNIX domain socket at `/var/run/docker.sock`.
 
-From within the Alpine container, the following command will therefor work as
+From within the Alpine container, the following command will therefore work as
 expected and show all running containers on the host. One of these containers
 will be your container. It will have been automatically be named to
 `dew_alpine_` followed by the PID of the `dew` process at the time of its
@@ -84,6 +84,17 @@ with the Docker CLI!
 
 ```shell
 docker ps
+```
+
+If you run the command from the root directory of this repository, you can even
+start a new environment from the prompt within the container. In other words,
+from the Alpine prompt in the container, running the following command will open
+yet another clean environment in another container. To verify this, you should
+see that running `dew.sh` downloads a new copy of the Docker client, as it does
+not exist in the cache from within the first container.
+
+```shell
+dew.sh --docker alpine
 ```
 
 ### Python
@@ -106,7 +117,7 @@ In the same vein, getting an interactive Tcl prompt is as easy as running the
 following command.
 
 ```shell
-dew tclsh
+dew.sh tclsh
 ```
 
 This uses a slightly more advanced environment configuration
@@ -122,8 +133,98 @@ Tcl prompt with a coloured prompt.
 ### Kubernetes
 
 To operate against a Kubernetes cluster, you could run a command similar to the
-following one:
+following one. The command uses yet another configuration
+[file](./config/kubectl.env), this time with the main goal of passing your
+`$HOME/.kube/config` file to the container.
 
 ```shell
-dew kubectl get pods --all-namespaces
+dew.sh kubectl get pods --all-namespaces
 ```
+
+## Command-Line Options
+
+`dew` offers a number of command-line options, possibly followed by a
+double-dash `--` to mark the end of the options, followed by the name of a
+Docker image (or the name of a tailored environment found under the
+configuration path), followed by arguments that will be passed to the Docker
+comainter at its creation (the `COMMAND` from a Dockerfile). Pass the option
+`--help` to get a list of the known options.
+
+## Environment Variables
+
+`dew` can also be configured using environment variables, these start with
+`DEW_`. Command-line options, when specified, have precedence over the
+variables. The variables are the only variables that can be set in the
+environment configurations found under the configuration path.
+
+### `DEW_CONFIG_PATH`
+
+This variable is a colon separated list of directories where `dew` will look for
+environment configuration files, i.e. files which basename matches the first
+command-line argument after all the options. `dew` will look for files without
+an extension, or the extension `.env` in that order. The default for the
+configuration path is the directory `dew` under `$XDG_CONFIG_HOME`, followed by
+the `config` directory under this repository. When `XDG_CONFIG_HOME` does not
+exist, it defaults to `$HOME/.config`.
+
+### `DEW_SOCK`
+
+This variable contains the location of the Docker UNIX domain socket that will
+be passed to the container created by `dew`. The default is to pass the socket
+at `/var/run/docker.sock`. When the value of this variable is empty, the socket
+will not be passed to the container. Note that this is not the same as the
+`DEW_DOCKER` variable. Both need to be set if you want a Docker CLI in your
+container.
+
+### `DEW_BLACKLIST`
+
+This variable is a comma-separated list of environment variables that will
+**not** be passed to the container where impersonation is turned on. The default
+is `SSH_AUTH_SOCK,TMPDIR,PATH`.
+
+### `DEW_IMPERSONATE`
+
+This variable is a boolean. When set to 1, the default, impersonation will
+happen, i.e. the process or interactive prompt inside the container will run
+under a user with the same user and group identifiers as the ones of the calling
+user. In addition, in interactive containers, the user insider the container
+will be given the same `HOME` directory as the original user, albeit empty.
+
+### `DEW_DOCKER`
+
+This variable is a boolean. When set to 1, a version of the Docker client should
+be injected into the destination container. The default is `0`, i.e. no Docker
+CLI available. Note that you need `DEW_SOCK` to point to the UNIX domain socket
+to arrange for the Docker CLI client in the container to be able to access the
+host's Docker daemon. When impersonating, user inside the container will be made
+a member of the `docker` group in order to have the proper permissions.
+
+### `DEW_MOUNT`
+
+This variable is a boolean. When set to 1, the default, the current directory
+will be mounted at the same location in the destination container. This
+directory will also be made the current directory inside the container.
+
+### `DEW_OPTS`
+
+The content of this variable is blindly passed to the `docker run` command when
+the container is created. It can be used to pass further files or directories to
+the container, e.g. the k8s configuration file, or an rc file.
+
+### `DEW_SHELL`
+
+This variable can contain the path to a shell that will be run for interactive
+commands. The default is to have an empty value, which will looked for the
+following possible shells in the container, in that order: `bash`, `ash`, `sh`.
+
+### `DEW_DOCKER_VERSION`
+
+This variable is the version of the Docker client to download and inject in the
+container when running with the `-d` (`--docker`) command-line option, or when
+the `DEW_DOCKER` variable is set to `1`.
+
+### `DEW_INSTALLDIR`
+
+This variable is the directory where to install binaries inside the container.
+This defaults to `/usr/local/bin`, a directory which is part of the default
+`PATH` of most distributions.
