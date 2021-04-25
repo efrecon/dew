@@ -5,11 +5,22 @@ across platforms. This script aims at running development-oriented environments
 in the form a Docker container based on an image with the tooling of your
 requiring, from within the current directory. In most cases, this allows for
 transient environments, as all is required on the host is a Docker daemon and
-images that can be garbage collected once done. Consquently, you should be able
+images that can be garbage collected once done. Consequently, you should be able
 to keep OS installation to a minimal and run most activities from within
-containers and in a transparent way.
+containers in a transparent way. In other words, `dew` is a shortcut to the following command (a little bit more advanced, but nothing very special):
 
-This scripts takes some inspiration from [lope] with the addition of being able
+```shell
+docker run \
+  -it --rm \
+  -v $(pwd):$(pwd) \
+  -w $(pwd) \
+  -u $(id -u):$(id -g) \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --network host \
+  xxx
+```
+
+This script takes some inspiration from [lope] with the addition of being able
 to read configurations for known environments. This minimises typing and
 automates all the necessary command-line options for making a given environment
 possible. Configurations are simply `env` files placed in a sub-directory of the
