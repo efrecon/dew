@@ -193,14 +193,15 @@ This variable contains the location of the Docker UNIX domain socket that will
 be passed to the container created by `dew`. The default is to pass the socket
 at `/var/run/docker.sock`. When the value of this variable is empty, the socket
 will not be passed to the container. Note that this is not the same as the
-`DEW_DOCKER` variable. Both need to be set if you want a Docker CLI in your
-container.
+[`DEW_DOCKER`](#dew_docker) variable. Both need to be set if you want a Docker
+CLI in your container.
 
 ### `DEW_BLACKLIST`
 
 This variable is a comma-separated list of environment variables that will
-**not** be passed to the container where impersonation is turned on. The default
-is `SSH_AUTH_SOCK,TMPDIR,PATH`.
+**not** be passed to the container where impersonation is turned on (see
+[`DEW_IMPERSONATE`](#dew_impersonate)). The default is
+`SSH_AUTH_SOCK,TMPDIR,PATH`.
 
 ### `DEW_IMPERSONATE`
 
@@ -214,10 +215,11 @@ will be given the same `HOME` directory as the original user, albeit empty.
 
 This variable is a boolean. When set to 1, a version of the Docker client should
 be injected into the destination container. The default is `0`, i.e. no Docker
-CLI available. Note that you need `DEW_SOCK` to point to the UNIX domain socket
-to arrange for the Docker CLI client in the container to be able to access the
-host's Docker daemon. When impersonating, user inside the container will be made
-a member of the `docker` group in order to have the proper permissions.
+CLI available. Note that you need [`DEW_SOCK`](#dew_sock) to point to the UNIX
+domain socket to arrange for the Docker CLI client in the container to be able
+to access the host's Docker daemon. When impersonating, user inside the
+container will be made a member of the `docker` group in order to have the
+proper permissions.
 
 ### `DEW_MOUNT`
 
@@ -241,7 +243,7 @@ following possible shells in the container, in that order: `bash`, `ash`, `sh`.
 
 This variable is the version of the Docker client to download and inject in the
 container when running with the `-d` (`--docker`) command-line option, or when
-the `DEW_DOCKER` variable is set to `1`.
+the [`DEW_DOCKER`](#dew_docker) variable is set to `1`.
 
 ### `DEW_INSTALLDIR`
 
