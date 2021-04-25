@@ -56,8 +56,8 @@ This simple command builds upon many of the "good" defaults. It will:
 + Automatically forward the values of most of your environment variables to the
   container.
 + Arrange for the container to have a minimal environment mimicing your local
-  environment: there will be a HOME directory, the same as yours. There will be
-  a user and a group, with the same IDs as yours.
+  environment: there will be a `$HOME` directory, the same as yours. There will
+  be a user and a group, with the same IDs as yours.
 
 ### Alpine
 
@@ -70,8 +70,15 @@ will end up having an Alpine promt where you cannot install additional software
 dew.sh alpine
 ```
 
-You can give yourself access to the host's Docker daemon and see other
-containers that are running by running the following command:
+To run as root, do the following instead:
+
+```shell
+dew.sh -r alpine
+```
+
+Without being root, and as long as your local user on the host has access to the
+Docker daemon, you can give yourself access to the host's Docker daemon and see
+other containers that are running by running the following command:
 
 ```shell
 dew.sh --docker alpine
@@ -98,11 +105,12 @@ docker ps
 ```
 
 If you run the command from the root directory of this repository, you can even
-start a new environment from the prompt within the container. In other words,
-from the Alpine prompt in the container, running the following command will open
-yet another clean environment in another container. To verify this, you should
-see that running `dew.sh` downloads a new copy of the Docker client, as it does
-not exist in the cache from within the first container.
+start yet another `dew` environment from the prompt within the first `dew`
+container. In other words, from the Alpine prompt in the container, running the
+following command will open yet another clean environment in another container.
+To verify this, you should see that running `dew.sh` downloads a new copy of the
+Docker client, as it does not exist in the cache from within the first
+container.
 
 ```shell
 dew.sh --docker alpine
@@ -117,7 +125,7 @@ dew python
 ```
 
 Setting up python uses a specific environment configuration
-[file](./config/python.env) that sepcifies a number of variables that will be
+[file](./config/python.env). It specifies a number of variables that will be
 used by `dew` when creating the container. In practice, this sets the shell to
 use for the environment to `-`, which is understood by `dew` as running the
 default `python` image from the Docker hub, but as your regular user.
@@ -159,21 +167,22 @@ double-dash `--` to mark the end of the options, followed by the name of a
 Docker image (or the name of a tailored environment found under the
 configuration path), followed by arguments that will be passed to the Docker
 comainter at its creation (the `COMMAND` from a Dockerfile). Pass the option
-`--help` to get a list of the known options.
+`--help` to get a list of known options.
 
 ## Environment Variables
 
 `dew` can also be configured using environment variables, these start with
 `DEW_`. Command-line options, when specified, have precedence over the
-variables. The variables are the only variables that can be set in the
-environment configurations found under the configuration path.
+variables. Apart from empty-lines and comments, the `DEW_`-led variables are the
+only variables that can be set in the environment configuration files found
+under the configuration path.
 
 ### `DEW_CONFIG_PATH`
 
 This variable is a colon separated list of directories where `dew` will look for
 environment configuration files, i.e. files which basename matches the first
 command-line argument after all the options. `dew` will look for files without
-an extension, or the extension `.env` in that order. The default for the
+an extension, or the extension `.env`, in that order. The default for the
 configuration path is the directory `dew` under `$XDG_CONFIG_HOME`, followed by
 the `config` directory under this repository. When `XDG_CONFIG_HOME` does not
 exist, it defaults to `$HOME/.config`.
