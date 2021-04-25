@@ -297,6 +297,9 @@ if [ "$#" -gt 1 ]; then
     cmd="$cmd --user $(id -u):$(id -g)"
   fi
   shift
+  if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
+    cmd="$cmd --entrypoint \"$DEW_SHELL\""
+  fi
   cmd="$cmd $DEW_IMAGE $*"
 elif [ -n "$DEW_SHELL" ]; then
   # If we have no other argument than a Docker image (or a configured argument),
