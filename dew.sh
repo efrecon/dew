@@ -321,6 +321,9 @@ elif [ -n "$DEW_SHELL" ]; then
     # entrypoint. We become the same user as the one running dew, after having
     # setup a minimial environment. This will run the specified shell with the
     # proper privieges.
+    if [ "$EFSL_VERBOSITY" = "trace" ]; then
+      cmd="$cmd -e DEW_DEBUG=1"
+    fi
     if [ "$DEW_IMPERSONATE" = "1" ]; then
       cmd="$cmd \
             -it \
@@ -347,6 +350,9 @@ else
   # If nothing at all was specified, we will run a shell under the proper
   # privileges, i.e. inside an encapsulated environment, minimally mimicing the
   # current user.
+  if [ "$EFSL_VERBOSITY" = "trace" ]; then
+    cmd="$cmd -e DEW_DEBUG=1"
+  fi
   if [ "$DEW_IMPERSONATE" = "1" ]; then
     cmd="$cmd \
           -it \
