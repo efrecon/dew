@@ -108,40 +108,39 @@ Usage:
   provided.
 "
 
+_OPTS=;   # Will contain list of vars set through the options
 # Parse options
 while [ $# -gt 0 ]; do
   case "$1" in
     -r | --root)
-      DEW_IMPERSONATE=0; shift;;
+      DEW_IMPERSONATE=0; _OPTS="DEW_IMPERSONATE $_OPTS"; shift;;
 
     -d | --docker)
-      DEW_DOCKER=1; shift;;
+      DEW_DOCKER=1; _OPTS="DEW_DOCKER $_OPTS"; shift;;
 
     --name)
-      DEW_NAME=$2; shift 2;;
+      DEW_NAME=$2; _OPTS="DEW_NAME $_OPTS"; shift 2;;
     --name=*)
-      DEW_NAME="${1#*=}"; shift 1;;
+      DEW_NAME="${1#*=}"; _OPTS="DEW_NAME $_OPTS"; shift 1;;
 
     --no-mount)
-      DEW_MOUNT=0; shift;;
+      DEW_MOUNT=0; _OPTS="DEW_MOUNT $_OPTS"; shift;;
 
     -o | --opts | --options)
-      DEW_OPTS=$2; shift 2;;
+      DEW_OPTS=$2; _OPTS="DEW_OPTS $_OPTS"; shift 2;;
     --opts=* | --options=*)
-      # shellcheck disable=2034 # Comes from log module
-      DEW_OPTS="${1#*=}"; shift 1;;
+      DEW_OPTS="${1#*=}"; _OPTS="DEW_OPTS $_OPTS"; shift 1;;
 
     -s | --shell)
-      DEW_SHELL=$2; shift 2;;
+      DEW_SHELL=$2; _OPTS="DEW_SHELL $_OPTS"; shift 2;;
     --shell=*)
-      # shellcheck disable=2034 # Comes from log module
-      DEW_SHELL="${1#*=}"; shift 1;;
+      DEW_SHELL="${1#*=}"; _OPTS="DEW_SHELL $_OPTS"; shift 1;;
 
     -v | --verbosity | --verbose)
-      EFSL_VERBOSITY=$2; shift 2;;
+      EFSL_VERBOSITY=$2; _OPTS="EFSL_VERBOSITY $_OPTS"; shift 2;;
     --verbosity=* | --verbose=*)
       # shellcheck disable=2034 # Comes from log module
-      EFSL_VERBOSITY="${1#*=}"; shift 1;;
+      EFSL_VERBOSITY="${1#*=}"; _OPTS="EFSL_VERBOSITY $_OPTS"; shift 1;;
 
     -\? | -h | --help)
       usage 0;;
@@ -153,6 +152,8 @@ while [ $# -gt 0 ]; do
       break;
   esac
 done
+# Store all our vars
+_ENV=$(set | grep -E '^(DEW_|EFSL_)')
 
 if [ "$#" = 0 ]; then
   die "You must at least provide the name of an image"
@@ -212,6 +213,10 @@ if [ -n "$DEW_CONFIG" ]; then
   log_info "Reading configuration for $1 from $DEW_CONFIG"
   # shellcheck disable=SC1090 # The whole point is to have it dynamic!
   . "${DEW_CONFIG}"
+  # Restore the variables that were forced through the options
+  for v in $_OPTS; do
+    eval "$(printf %s\\n "$_ENV" | grep "^${v}=")"
+  done
 fi
 
 # Download Docker client at the version specified by DEW_DOCKER_VERSION into the
