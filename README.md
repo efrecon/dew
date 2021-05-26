@@ -160,6 +160,23 @@ following one. The command uses yet another configuration
 dew.sh kubectl get pods --all-namespaces
 ```
 
+### lazydocker
+
+To run lazydocker to analyse what is currently running at your local Docker
+daemon, run the following command:
+
+```shell
+dew.sh --docker --root --shell - lazyteam/lazydocker
+```
+
+As this is almost too long, even when using the short options, there is a
+ready-made configuration for [lazydocker](./config/lazydocker.env). So you
+should instead be able to run:
+
+```shell
+dew.sh lazydocker
+```
+
 ## Command-Line Options
 
 `dew` offers a number of command-line options, possibly followed by a
