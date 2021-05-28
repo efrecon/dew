@@ -1,19 +1,23 @@
 # Docker EveryWhere, `dew`
 
-We are in 2021! Docker can be used to provide a consequent working environment
-across platforms. This script aims at development workflows consisting of Docker
-containers based on an image with the tooling of your requiring. These
-containers will run from within the current directory and as your current user
-inside the container. In most cases, this allows for transient environments, as
-all that is required on the host is a Docker daemon and images that can be
-garbage collected once done.
+We are in 2021! Docker can be used to provide the same working environment
+across platforms. `dew` aims at development workflows consisting of Docker
+containers based on images with the tooling of your requiring. These containers
+will run from within the current directory and as your current user inside the
+container. In most cases, this allows for transient environments, as all that is
+required on the host is a Docker daemon and images that can be garbage collected
+once done (containers are automatically removed once they have ended).
 
 Running `dew` increases security by encapsulating only the relevant part of the
 file system required for a workflow. In addition, it should save you from
 "dependency hell". You should be able to keep OS installation to a minimal and
-run most activities from within containers in a transparent way. In other words,
-`dew` is a shortcut to the following command (a little bit more
-[advanced](#implementation), but nothing very special):
+run most activities from within containers in a transparent way. These
+containers will have your shell code, your configuration, but all binaries and
+dependencies will remain in the container and disappear automatically once done.
+
+For the technically enclined, `dew` is a shortcut to the command below.
+Actually, the [implementation](#implementation) is a bit more complex, but in
+the same spirit:
 
 ```shell
 docker run \
