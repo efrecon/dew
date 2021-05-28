@@ -1,14 +1,18 @@
-# Docker EveryWhere
+# Docker EveryWhere, `dew`
 
 We are in 2021! Docker can be used to provide a consequent working environment
-across platforms. This script aims at running development-oriented environments
-in the form a Docker container based on an image with the tooling of your
-requiring, from within the current directory and as your current user inside the
-container. In most cases, this allows for transient environments, as all is
-required on the host is a Docker daemon and images that can be garbage collected
-once done. Consequently, you should be able to keep OS installation to a minimal
-and run most activities from within containers in a transparent way. In other
-words, `dew` is a shortcut to the following command (a little bit more
+across platforms. This script aims at development workflows consisting of Docker
+containers based on an image with the tooling of your requiring. These
+containers will run from within the current directory and as your current user
+inside the container. In most cases, this allows for transient environments, as
+all that is required on the host is a Docker daemon and images that can be
+garbage collected once done.
+
+Running `dew` increases security by encapsulating only the relevant part of the
+file system required for a workflow. In addition, it should save you from
+"dependency hell". You should be able to keep OS installation to a minimal and
+run most activities from within containers in a transparent way. In other words,
+`dew` is a shortcut to the following command (a little bit more
 [advanced](#implementation), but nothing very special):
 
 ```shell
@@ -61,8 +65,8 @@ dew.sh busybox
 This simple command builds upon many of the "good" defaults. It will:
 
 + Give you an interactive `ash` prompt with the content of the current directory
-  visible. `ash` is picked up from a list of plausible shells, as one of
-  existing in `busybox`.
+  visible. `ash` is picked up from a list of plausible shells, as one existing
+  in `busybox`.
 + Forbid access to parent directories, or directories elsewhere on the disk.
   This is a security feature.
 + Arrange for the container to run the shell with your user and group ID, so
@@ -72,6 +76,33 @@ This simple command builds upon many of the "good" defaults. It will:
 + Arrange for the container to have a minimal environment mimicing your local
   environment: there will be a `$HOME` directory, the same as yours. There will
   be a user and a group, with the same IDs as yours.
+
+To verify this, assuming that you have a copy of this repository and its
+[submodules][submodule] at `/home/emmanuel/dev/foss/dew` you could run the
+following command from that directory.
+
+```shell
+./dew.sh busybox find \$HOME -type d | grep -v .git
+```
+
+This should output the following. `.git` information has been removed to keep
+this output sizeable. You can verify that only the relevant parts of the
+filesystem have been made available to the container, but also that the
+container has accessed to the `$HOME` variable and that it matches your own
+`$HOME` on the host.
+
+```
+/home/emmanuel
+/home/emmanuel/dev
+/home/emmanuel/dev/foss
+/home/emmanuel/dev/foss/dew
+/home/emmanuel/dev/foss/dew/libexec
+/home/emmanuel/dev/foss/dew/libexec/docker-rebase
+/home/emmanuel/dev/foss/dew/libexec/docker-rebase/lib
+/home/emmanuel/dev/foss/dew/libexec/docker-rebase/lib/mg.sh
+/home/emmanuel/dev/foss/dew/libexec/docker-rebase/lib/mg.sh/spec
+/home/emmanuel/dev/foss/dew/libexec/docker-rebase/lib/mg.sh/spec/support
+```
 
 ### Alpine
 
@@ -334,3 +365,13 @@ requires a number of common Linux utilities to be present in the target
 container. When running with slimmed down images, you can make sure to provide
 such an environment through the `--rebase` option or its equivalent
 [`DEW_REBASE`](#dew_rebase) variable.
+
+## Requirements
+
+`dew` has minimal requirements and is implemented in pure POSIX shell for
+maximum compatibility across platforms and operating systems. `dew` only uses
+the command-line options of `sed`, `grep` etc. that available under their
+`busybox` implementation. When creating users and groups, [`su.sh`](./su.sh)
+tries to use the tools available in the base OS used by the container. Finally,
+when [rebasing](#dew_rebase) is necessary, [rebase.sh][rebase] will require `jq`
+to be installed on the host system.
