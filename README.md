@@ -3,12 +3,13 @@
 We are in 2021! Docker can be used to provide a consequent working environment
 across platforms. This script aims at running development-oriented environments
 in the form a Docker container based on an image with the tooling of your
-requiring, from within the current directory. In most cases, this allows for
-transient environments, as all is required on the host is a Docker daemon and
-images that can be garbage collected once done. Consequently, you should be able
-to keep OS installation to a minimal and run most activities from within
-containers in a transparent way. In other words, `dew` is a shortcut to the
-following command (a little bit more advanced, but nothing very special):
+requiring, from within the current directory and as your current user inside the
+container. In most cases, this allows for transient environments, as all is
+required on the host is a Docker daemon and images that can be garbage collected
+once done. Consequently, you should be able to keep OS installation to a minimal
+and run most activities from within containers in a transparent way. In other
+words, `dew` is a shortcut to the following command (a little bit more
+[advanced](#implementation), but nothing very special):
 
 ```shell
 docker run \
@@ -31,7 +32,8 @@ this repository.
   [lope]: https://github.com/Crazybus/lope
 
 **Note**: This project uses git [submodules], use one of the two commands to
-make sure you have a copy of the submodules.
+make sure you have a copy of the submodules. Without the modules, the main
+script will not even start!
 
 ```shell
 git clone --recursive https://github.com/efrecon/docker-images.git
@@ -182,8 +184,12 @@ dew.sh --docker --root --shell - lazyteam/lazydocker
 ```
 
 As this is almost too long, even when using the short options, there is a
-ready-made configuration for [lazydocker](./config/lazydocker.env). So you
-should instead be able to run:
+ready-made configuration for [lazydocker](./config/lazydocker.env). The
+configuration arranges to run under your account with impersonation and for
+configuration settings to be saved at their standard location in your `$HOME`
+directory. This requires [rebasing](#dew_rebase) the image on top of
+`busybox:latest`. Instead of the longer command above, you should be able to
+run:
 
 ```shell
 dew.sh lazydocker
@@ -279,3 +285,52 @@ the [`DEW_DOCKER`](#dew_docker) variable is set to `1`.
 This variable is the directory where to install binaries inside the container.
 This defaults to `/usr/local/bin`, a directory which is part of the default
 `PATH` of most distributions.
+
+### `DEW_REBASE`
+
+This variable will [rebase] the main image passed as the first argument on top
+of the image given to the option. This can be handy when running with slimmed
+down images that only contain relevant binaries, and when you, for example,
+desire a shell and related utilities at an interactive prompt in such an image.
+Rebasing will generate a new image, and this will happen once and only once per
+pair of images.
+
+  [rebase]: https://github.com/efrecon/docker-rebase
+
+## Implementation
+
+In many cases, this script goes a few steps further than the `docker run`
+command highlighted in the introduction.
+
+First of all, in encapsulates all processes running in the container around
+`tini` using the `--init` command-line option of the Docker `run` sub-command.
+This facilitates signal handling and ensures that all sub-processes will
+properly terminate without waiting times.
+
+Second, it pushes timezone information from the host into the container for
+accurate time readings.
+
+Third, and most importantly, `dew` will often not directly add the `--user`
+option to the `run` subcommand, but still ensures that the process(es) is/are
+run under your user and group. To this end, `dew` injects a
+[su](./su.sh)-encapsulating script into the container and arranges for that
+script to be run as the entrypoint. The script will perform book-keeping
+operations such as creating a matching user and group in the "OS" of the
+container, including a home at the same location as yours. The script will also
+ensure that your user inside the container is a member of the `docker` group to
+facilitate access to the mounted Docker socket. Once all book-keeping operations
+have been performed, the script becomes "you" inside the container and execute
+all relevant processes under that user with `su`.
+
+Encapsulated behind the main `su`, processes should see an empty (but existing!)
+`$HOME`, apart from the current directory where the `dew` container was started
+from. That directory will be populated with all files accessible under that part
+of the filesystem tree. Some tools require more files to be accessible for
+proper operation (configuration files, etc.). In that case, you should be able
+to add necessary files through passing additional mounting options to the docker
+`run` subcommand, e.g. [kubectl](./config/kubectl.env) or
+[lazydocker](./config/lazydocker.env). The [su](su.sh)-encapsulating script
+requires a number of common Linux utilities to be present in the target
+container. When running with slimmed down images, you can make sure to provide
+such an environment through the `--rebase` option or its equivalent
+[`DEW_REBASE`](#dew_rebase) variable.
