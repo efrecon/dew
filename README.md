@@ -93,7 +93,8 @@ This should output the following. `.git` information has been removed to keep
 this output sizeable. You can verify that only the relevant parts of the
 filesystem have been made available to the container, but also that the
 container has accessed to the `$HOME` variable and that it matches your own
-`$HOME` on the host.
+`$HOME` on the host (the `$` is escaped and the variable is resolved once in the
+container).
 
 ```
 /home/emmanuel
