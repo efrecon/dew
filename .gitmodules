@@ -1,0 +1,3 @@
+[submodule "libexec/docker-rebase"]
+	path = libexec/docker-rebase
+	url = https://github.com/efrecon/docker-rebase.git

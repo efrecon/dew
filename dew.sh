@@ -20,10 +20,9 @@ abspath() {
 
 # Build a default colon separated DEW_LIBPATH using the root directory to look
 # for modules that we depend on. DEW_LIBPATH can be set from the outside to
-# facilitate location. Note that this only works when there is support for
-# readlink -f, see https://github.com/ko1nksm/readlinkf for a POSIX alternative.
+# facilitate location.
 DEW_ROOTDIR=$( cd -P -- "$(dirname -- "$(command -v -- "$(abspath "$0")")")" && pwd -P )
-DEW_LIBPATH=${DEW_LIBPATH:-${DEW_ROOTDIR}/lib}
+DEW_LIBPATH=${DEW_LIBPATH:-${DEW_ROOTDIR}/libexec/docker-rebase/lib/mg.sh}
 
 # Look for modules passed as parameters in the DEW_LIBPATH and source them.
 # Modules are required so fail as soon as it was not possible to load a module
@@ -47,7 +46,7 @@ module() {
 }
 
 # Source in all relevant modules. This is where most of the "stuff" will occur.
-module log
+module log locals options
 
 # Arrange so we know where user settings are on this system.
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME}/.config}
@@ -99,72 +98,35 @@ DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-20.10.6}
 # relevant and necessary.
 DEW_INSTALLDIR=${DEW_INSTALLDIR:-/usr/local/bin}
 
-# shellcheck disable=2034 # Usage string is used by log module on errors
-EFSL_USAGE="
-Synopsis:
-  Kick-start a Docker-based environment from the current directory
+# Rebase image on the following one before running it.
+DEW_REBASE=${DEW_REBASE:-}
 
-Usage:
-  $EFSL_CMDNAME [-option arg] [--] img args...
-  where all dash-led single options are as follows:
-    -r | --root      Do not inpersonate user in container
-    -d | --docker    Inject Docker client into container
-    -o | --opt(ion)s Options blindly passed to docker run
-    --shell          Shell to run interactively, default is empty, meaning
-                     a good guess. Set to - to leave the entrypoint unchanged.
-    -v | --verbosity One of: error, warn, notice, info, debug or trace
-
-  The name of a docker image is a mandatory argument. When only a
-  name is passed, the best possible interactive shell will be
-  provided.
-"
+# Path to rebasing script to execute
+DEW_REBASER=${DEW_REBASER:-"${DEW_ROOTDIR%/}/libexec/docker-rebase/rebase.sh"}
 
 _OPTS=;   # Will contain list of vars set through the options
-# Parse options
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -r | --root)
-      DEW_IMPERSONATE=0; _OPTS="DEW_IMPERSONATE $_OPTS"; shift;;
+parseopts \
+  --main \
+  --synopsis "Kick-start a Docker-based environment from the current directory" \
+  --usage "$MG_CMDNAME [options] -- image args..." \
+  --description "The name of a docker image is a mandatory argument. When only a name is passed, the best possible interactive shell will be provided." \
+  --prefix "DEW" \
+  --shift _begin \
+  --vars _OPTS \
+  --options \
+    r,root FLAG,INVERT IMPERSONATE - "Do not impersonate user in container" \
+    d,docker FLAG DOCKER - "Inject Docker client into container" \
+    o,opts,options OPTION OPTS - "Options blindly passed to docker run" \
+    s,shell OPTION SHELL - "Shell to run interactively, default is empty, meaning a good guess. Set to - to leave the entrypoint unchanged." \
+    rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
+    h,help FLAG @HELP - "Print this help and exit" \
+  -- "$@"
 
-    -d | --docker)
-      DEW_DOCKER=1; _OPTS="DEW_DOCKER $_OPTS"; shift;;
+# shellcheck disable=SC2154  # Var is set by parseopts
+shift "$_begin"
 
-    --name)
-      DEW_NAME=$2; _OPTS="DEW_NAME $_OPTS"; shift 2;;
-    --name=*)
-      DEW_NAME="${1#*=}"; _OPTS="DEW_NAME $_OPTS"; shift 1;;
-
-    --no-mount)
-      DEW_MOUNT=0; _OPTS="DEW_MOUNT $_OPTS"; shift;;
-
-    -o | --opts | --options)
-      DEW_OPTS=$2; _OPTS="DEW_OPTS $_OPTS"; shift 2;;
-    --opts=* | --options=*)
-      DEW_OPTS="${1#*=}"; _OPTS="DEW_OPTS $_OPTS"; shift 1;;
-
-    -s | --shell)
-      DEW_SHELL=$2; _OPTS="DEW_SHELL $_OPTS"; shift 2;;
-    --shell=*)
-      DEW_SHELL="${1#*=}"; _OPTS="DEW_SHELL $_OPTS"; shift 1;;
-
-    -v | --verbosity | --verbose)
-      EFSL_VERBOSITY=$2; _OPTS="EFSL_VERBOSITY $_OPTS"; shift 2;;
-    --verbosity=* | --verbose=*)
-      # shellcheck disable=2034 # Comes from log module
-      EFSL_VERBOSITY="${1#*=}"; _OPTS="EFSL_VERBOSITY $_OPTS"; shift 1;;
-
-    -\? | -h | --help)
-      usage 0;;
-    --)
-      shift; break;;
-    -*)
-      usage 1 "Unknown option: $1 !";;
-    *)
-      break;
-  esac
-done
 # Store all our vars
-_ENV=$(set | grep -E '^(DEW_|EFSL_)')
+_ENV=$(set | grep -E '^(DEW_|MG_)')
 
 if [ "$#" = 0 ]; then
   die "You must at least provide the name of an image"
@@ -228,6 +190,18 @@ if [ -n "$DEW_CONFIG" ]; then
   for v in $_OPTS; do
     eval "$(printf %s\\n "$_ENV" | grep "^${v}=")"
   done
+fi
+
+# Rebase (or not) image
+if [ -n "$DEW_REBASE" ]; then
+  rebased=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" --dry-run -- "$DEW_IMAGE")
+  if docker image inspect "$rebased" >/dev/null 2>&1; then
+    log_debug "Rebasing to $rebased already performed, skipping"
+    DEW_IMAGE=$rebased
+  else
+    log_notice "Rebasing $1 on top of $DEW_REBASE"
+    DEW_IMAGE=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" -- "$DEW_IMAGE")
+  fi
 fi
 
 # Download Docker client at the version specified by DEW_DOCKER_VERSION into the
@@ -314,7 +288,7 @@ if [ "$#" -gt 1 ]; then
     # running interactively. Otherwise, just run the image with specified
     # arguments, but with a different entrypoint.
     if [ "$DEW_IMPERSONATE" = "1" ]; then
-      if [ "$EFSL_VERBOSITY" = "trace" ]; then
+      if [ "$MG_VERBOSITY" = "trace" ]; then
         cmd="$cmd -e DEW_DEBUG=1"
       fi
       cmd="$cmd \
@@ -360,7 +334,7 @@ elif [ -n "$DEW_SHELL" ]; then
     # entrypoint. We become the same user as the one running dew, after having
     # setup a minimial environment. This will run the specified shell with the
     # proper privieges.
-    if [ "$EFSL_VERBOSITY" = "trace" ]; then
+    if [ "$MG_VERBOSITY" = "trace" ]; then
       cmd="$cmd -e DEW_DEBUG=1"
     fi
     if [ "$DEW_IMPERSONATE" = "1" ]; then
@@ -389,7 +363,7 @@ else
   # If nothing at all was specified, we will run a shell under the proper
   # privileges, i.e. inside an encapsulated environment, minimally mimicing the
   # current user.
-  if [ "$EFSL_VERBOSITY" = "trace" ]; then
+  if [ "$MG_VERBOSITY" = "trace" ]; then
     cmd="$cmd -e DEW_DEBUG=1"
   fi
   if [ "$DEW_IMPERSONATE" = "1" ]; then

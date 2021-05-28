@@ -7,7 +7,8 @@ requiring, from within the current directory. In most cases, this allows for
 transient environments, as all is required on the host is a Docker daemon and
 images that can be garbage collected once done. Consequently, you should be able
 to keep OS installation to a minimal and run most activities from within
-containers in a transparent way. In other words, `dew` is a shortcut to the following command (a little bit more advanced, but nothing very special):
+containers in a transparent way. In other words, `dew` is a shortcut to the
+following command (a little bit more advanced, but nothing very special):
 
 ```shell
 docker run \
@@ -29,10 +30,21 @@ this repository.
 
   [lope]: https://github.com/Crazybus/lope
 
+**Note**: This project uses git [submodules], use one of the two commands to
+make sure you have a copy of the submodules.
+
+```shell
+git clone --recursive https://github.com/efrecon/docker-images.git
+git submodule update --init --recursive
+```
+
+  [submodules]: https://git-scm.com/book/en/v2/Git-Tools-Submodules
+
 ## Examples
 
 All these examples suppose that you have made `dew.sh` available from your
-`$PATH`.
+`$PATH`. They will also work if you symlink `dew` to a place where you have this
+repository installed, and arrange for the `dew` symlink to be in your `$PATH`.
 
 ### Busybox
 
