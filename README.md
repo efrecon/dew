@@ -82,8 +82,8 @@ This simple command builds upon many of the "good" defaults. It will:
   be a user and a group, with the same IDs as yours.
 
 To verify this, assuming that you have a copy of this repository and its
-[submodules][submodule] at `/home/emmanuel/dev/foss/dew` you could run the
-following command from that directory.
+[submodules] at `/home/emmanuel/dev/foss/dew` you could run the following
+command from that directory.
 
 ```shell
 ./dew.sh busybox find \$HOME -type d | grep -v .git
