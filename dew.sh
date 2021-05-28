@@ -295,17 +295,40 @@ if [ "$DEW_DOCKER" = "1" ]; then
 fi
 
 if [ "$#" -gt 1 ]; then
-  # When we have specified arguments at the command line, we expect to be
-  # calling a program in a non-interactive manner. Elevate to the user if
-  # necessary and run
-  if [ "$DEW_IMPERSONATE" = "1" ]; then
-    cmd="$cmd --user $(id -u):$(id -g)"
-  fi
-  shift
+  shift; # Jump to the arguments
+
   if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
-    cmd="$cmd --entrypoint \"$DEW_SHELL\""
+    # We have specified a "shell", we understand this as specifying a different
+    # entrypoint. If impersonation is on, then we behave more or less as when
+    # running interactively. Otherwise, just run the image with specified
+    # arguments, but with a different entrypoint.
+    if [ "$DEW_IMPERSONATE" = "1" ]; then
+      if [ "$EFSL_VERBOSITY" = "trace" ]; then
+        cmd="$cmd -e DEW_DEBUG=1"
+      fi
+      cmd="$cmd \
+            -it \
+            -a stdin -a stdout -a stderr \
+            -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+            -e DEW_UID=$(id -u) \
+            -e DEW_GID=$(id -g) \
+            -e DEW_SHELL=$DEW_SHELL \
+            -e HOME=$HOME \
+            -e USER=$USER \
+            --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
+            $DEW_IMAGE $*"
+    else
+      cmd="$cmd --entrypoint \"$DEW_SHELL\" $DEW_IMAGE $*"
+    fi
+  else
+    # When we have specified arguments at the command line, we expect to be
+    # calling a program in a non-interactive manner. Elevate to the user if
+    # necessary and run
+    if [ "$DEW_IMPERSONATE" = "1" ]; then
+      cmd="$cmd --user $(id -u):$(id -g)"
+    fi
+    cmd="$cmd $DEW_IMAGE $*"
   fi
-  cmd="$cmd $DEW_IMAGE $*"
 elif [ -n "$DEW_SHELL" ]; then
   # If we have no other argument than a Docker image (or a configured argument),
   # we behave a little differently when a specific shell is provided. When the

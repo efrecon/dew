@@ -118,11 +118,11 @@ if [ "${USER:-}" = "root" ] || [ -z "${USER:-}" ]; then
   # either the default shell that we guessed existed in the container, or with
   # the one forced in from the outside by dew.
   if [ -n "${DEW_SHELL:-}" ]; then
-    log "Replacing ourselves with $DEW_SHELL"
-    exec "$DEW_SHELL"
+    log "Replacing ourselves with $DEW_SHELL $*"
+    exec "$DEW_SHELL" "$@"
   else
-    log "Replacing ourselves with $SHELL"
-    exec "$SHELL"
+    log "Replacing ourselves with $SHELL $*"
+    exec "$SHELL" "$@"
   fi
 else
   # Otherwise (and ... in most cases), arrange for a minimal environment to
@@ -175,11 +175,11 @@ else
   # single binary in them.
   if command -v "su" >/dev/null 2>&1; then
     if [ -z "${DEW_SHELL:-}" ]; then
-      log "Becoming $USER, running $SHELL as set in /etc/passwd"
-      exec su "$USER"
+      log "Becoming $USER, running $SHELL $* as set in /etc/passwd"
+      exec su "$USER" "$@"
     else
-      log "Becoming $USER, running $DEW_SHELL"
-      exec su -s "$(command -v "$DEW_SHELL")" "$USER"
+      log "Becoming $USER, running $DEW_SHELL $*"
+      exec su -s "$(command -v "$DEW_SHELL")" "$USER" "$@"
     fi
   else
     log "Cannot find su"
