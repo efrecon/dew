@@ -70,6 +70,9 @@ DEW_BLACKLIST=${DEW_BLACKLIST:-SSH_AUTH_SOCK,TMPDIR,PATH}
 # id (and group).
 DEW_IMPERSONATE=${DEW_IMPERSONATE:-1}
 
+# Should we provide for an interactive, terminal inside the container
+DEW_INTERACTIVE=${DEW_INTERACTIVE:-1}
+
 # Should we inject the docker client in the destination container
 DEW_DOCKER=${DEW_DOCKER:-0}
 
@@ -119,6 +122,7 @@ parseopts \
     o,opts,options OPTION OPTS - "Options blindly passed to docker run" \
     s,shell OPTION SHELL - "Shell to run interactively, default is empty, meaning a good guess. Set to - to leave the entrypoint unchanged." \
     rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
+    no-interactive FLAG,INVERT INTERACTIVE - "Do not provide for interactiion" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
 
@@ -257,6 +261,12 @@ if [ -n "$DEW_OPTS" ]; then
   cmd="$cmd $DEW_OPTS"
 fi
 
+if [ "$DEW_INTERACTIVE" = "1" ]; then
+  cmd="$cmd \
+        -it \
+        -a stdin -a stdout -a stderr"
+fi
+
 # When impersonating pass all environment variables that should be to the
 # container.
 if [ "$DEW_IMPERSONATE" = "1" ]; then
@@ -292,8 +302,6 @@ if [ "$#" -gt 1 ]; then
         cmd="$cmd -e DEW_DEBUG=1"
       fi
       cmd="$cmd \
-            -it \
-            -a stdin -a stdout -a stderr \
             -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
             -e DEW_UID=$(id -u) \
             -e DEW_GID=$(id -g) \
@@ -325,10 +333,7 @@ elif [ -n "$DEW_SHELL" ]; then
     if [ "$DEW_IMPERSONATE" = "1" ]; then
       cmd="$cmd --user $(id -u):$(id -g)"
     fi
-    cmd="$cmd \
-          -it \
-          -a stdin -a stdout -a stderr \
-          $DEW_IMAGE"
+    cmd="$cmd $DEW_IMAGE"
   else
     # If the shell was specified, we understand this as trying to override the
     # entrypoint. We become the same user as the one running dew, after having
@@ -339,8 +344,6 @@ elif [ -n "$DEW_SHELL" ]; then
     fi
     if [ "$DEW_IMPERSONATE" = "1" ]; then
       cmd="$cmd \
-            -it \
-            -a stdin -a stdout -a stderr \
             -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
             -e DEW_UID=$(id -u) \
             -e DEW_GID=$(id -g) \
@@ -351,8 +354,6 @@ elif [ -n "$DEW_SHELL" ]; then
             $DEW_IMAGE"
     else
       cmd="$cmd \
-            -it \
-            -a stdin -a stdout -a stderr \
             -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
             -e DEW_SHELL=$DEW_SHELL \
             --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
@@ -368,8 +369,6 @@ else
   fi
   if [ "$DEW_IMPERSONATE" = "1" ]; then
     cmd="$cmd \
-          -it \
-          -a stdin -a stdout -a stderr \
           -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
           -e DEW_UID=$(id -u) \
           -e DEW_GID=$(id -g) \
@@ -379,8 +378,6 @@ else
           $DEW_IMAGE"
   else
     cmd="$cmd \
-          -it \
-          -a stdin -a stdout -a stderr \
           -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
           --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
           $DEW_IMAGE"
