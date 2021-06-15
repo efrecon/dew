@@ -282,6 +282,15 @@ under a user with the same user and group identifiers as the ones of the calling
 user. In addition, in interactive containers, the user insider the container
 will be given the same `HOME` directory as the original user, albeit empty.
 
+### `DEW_INTERACTIVE`
+
+This variable is a boolean. When set to 1, the default, interaction will be
+enabled within the container. In practice, this means that the Docker run
+command will use the options `-it -a stdin -a stdout -a stderr`. It is possible
+to turn this off, but re-adding a single `-i` through the
+[`DEW_OPTS`](#dew_opts) variable for proper pipe support. See
+[bat](./config/bat.env) for an example.
+
 ### `DEW_DOCKER`
 
 This variable is a boolean. When set to 1, a version of the Docker client should
