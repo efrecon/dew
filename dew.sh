@@ -28,17 +28,15 @@ DEW_LIBPATH=${DEW_LIBPATH:-${DEW_ROOTDIR}/libexec/docker-rebase/lib/mg.sh}
 # Modules are required so fail as soon as it was not possible to load a module
 module() {
   for module in "$@"; do
-    OIFS=$IFS
-    IFS=:
-    for d in $DEW_LIBPATH; do
+    for d in $(printf %s\\n "$DEW_LIBPATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
       if [ -f "${d}/${module}.sh" ]; then
         # shellcheck disable=SC1090
         . "${d}/${module}.sh"
-        IFS=$OIFS
+        unset module; # Use the variable as a marker for module found.
         break
       fi
     done
-    if [ "$IFS" = ":" ]; then
+    if [ -n "${module:-}" ]; then
       echo "Cannot find module $module in $DEW_LIBPATH !" >& 2
       exit 1
     fi
@@ -46,7 +44,7 @@ module() {
 }
 
 # Source in all relevant modules. This is where most of the "stuff" will occur.
-module log locals options
+module log locals options text
 
 # Arrange so we know where user settings are on this system.
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME}/.config}
@@ -71,7 +69,7 @@ DEW_BLACKLIST=${DEW_BLACKLIST:-SSH_AUTH_SOCK,TMPDIR,PATH}
 DEW_IMPERSONATE=${DEW_IMPERSONATE:-1}
 
 # Should we provide for an interactive, terminal inside the container
-DEW_INTERACTIVE=${DEW_INTERACTIVE:-1}
+DEW_INTERACTIVE=${DEW_INTERACTIVE:-"auto"}
 
 # Should we inject the docker client in the destination container
 DEW_DOCKER=${DEW_DOCKER:-0}
@@ -122,7 +120,7 @@ parseopts \
     o,opts,options OPTION OPTS - "Options blindly passed to docker run" \
     s,shell OPTION SHELL - "Shell to run interactively, default is empty, meaning a good guess. Set to - to leave the entrypoint unchanged." \
     rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
-    no-interactive FLAG,INVERT INTERACTIVE - "Do not provide for interactiion" \
+    i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
 
@@ -156,16 +154,13 @@ check_config() {
 # container passed as argument if it exists and is valid. Empty string
 # otherwise.
 config() {
-  OFS=$IFS
-  IFS=:
-  for d in $DEW_CONFIG_PATH; do
+  for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
     log_trace "Looking for $1 in $d"
     if [ -d "$d" ]; then
       for f in "${d}/$1" "${d}/${1}.env"; do
         if [ -f "$f" ]; then
           if check_config "$f"; then
             printf %s\\n "$f"
-            IFS=$OFS
             return
           else
             log_error "Configuration file at $f contains more than dew-specific configuration"
@@ -174,7 +169,6 @@ config() {
       done
     fi
   done
-  IFS=$OFS
 }
 
 # Cut out the possible tag/sha256 at the end of the image name and extract the
@@ -183,11 +177,12 @@ config() {
 bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$~~')")
 [ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
 DEW_IMAGE=$1
+shift; # Jump to the arguments
 
 # Read configuration file for the first parameter
-DEW_CONFIG=$(config "$1")
+DEW_CONFIG=$(config "$DEW_IMAGE")
 if [ -n "$DEW_CONFIG" ]; then
-  log_info "Reading configuration for $1 from $DEW_CONFIG"
+  log_info "Reading configuration for $DEW_IMAGE from $DEW_CONFIG"
   # shellcheck disable=SC1090 # The whole point is to have it dynamic!
   . "${DEW_CONFIG}"
   # Restore the variables that were forced through the options
@@ -203,7 +198,7 @@ if [ -n "$DEW_REBASE" ]; then
     log_debug "Rebasing to $rebased already performed, skipping"
     DEW_IMAGE=$rebased
   else
-    log_notice "Rebasing $1 on top of $DEW_REBASE"
+    log_notice "Rebasing $DEW_IMAGE on top of $DEW_REBASE"
     DEW_IMAGE=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" -- "$DEW_IMAGE")
   fi
 fi
@@ -261,12 +256,6 @@ if [ -n "$DEW_OPTS" ]; then
   cmd="$cmd $DEW_OPTS"
 fi
 
-if [ "$DEW_INTERACTIVE" = "1" ]; then
-  cmd="$cmd \
-        -it \
-        -a stdin -a stdout -a stderr"
-fi
-
 # When impersonating pass all environment variables that should be to the
 # container.
 if [ "$DEW_IMPERSONATE" = "1" ]; then
@@ -289,9 +278,13 @@ if [ "$DEW_DOCKER" = "1" ]; then
   fi
 fi
 
-if [ "$#" -gt 1 ]; then
-  shift; # Jump to the arguments
+if is_true "$DEW_INTERACTIVE" || { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ] && [ "$#" = "0" ]; }; then
+  cmd="$cmd \
+        -it \
+        -a stdin -a stdout -a stderr"
+fi
 
+if [ "$#" -gt 0 ]; then
   if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
     # We have specified a "shell", we understand this as specifying a different
     # entrypoint. If impersonation is on, then we behave more or less as when
