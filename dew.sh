@@ -105,6 +105,9 @@ DEW_REBASE=${DEW_REBASE:-}
 # Path to rebasing script to execute
 DEW_REBASER=${DEW_REBASER:-"${DEW_ROOTDIR%/}/libexec/docker-rebase/rebase.sh"}
 
+# Comment to print out before running
+DEW_COMMENT=${DEW_COMMENT:-""}
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -121,6 +124,7 @@ parseopts \
     s,shell OPTION SHELL - "Shell to run interactively, default is empty, meaning a good guess. Set to - to leave the entrypoint unchanged." \
     rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
+    comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
 
@@ -375,6 +379,11 @@ else
           --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
           $DEW_IMAGE"
   fi
+fi
+
+# Print out comment (same destination as logging, i.e. stderr)
+if [ -n "$DEW_COMMENT" ]; then
+  printf \\n%s\\n\\n "$DEW_COMMENT" >&2
 fi
 
 # Trace the entire set of variables that were used for taking decisions,
