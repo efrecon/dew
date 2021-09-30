@@ -342,6 +342,19 @@ pair of images.
 
   [rebase]: https://github.com/efrecon/docker-rebase
 
+### `DEW_XDG`
+
+When the value of this variable is not empty, `dew` will create 4 directories
+under the [XDG] standard directories, named after the value of that variable
+(i.e. sub-directories of `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`
+and `$XDG_CACHE_HOME`). Each directory that was successfully created, will be
+mounted into the container for read and write. Using sub-directories is
+compatible with most tools and enforces configuration isolation as the binaries
+running in the container will not be able to read any other XDG configuration
+files than the selected ones.
+
+  [XDG]: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+
 ## Implementation
 
 In many cases, this script goes a few steps further than the `docker run`
