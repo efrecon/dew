@@ -46,10 +46,10 @@ module() {
 # Source in all relevant modules. This is where most of the "stuff" will occur.
 module log locals options text
 
-# Arrange so we know where user settings are on this system.
+# Arrange so we know where XDG directories are on this system.
+XDG_DATA_HOME=${XDG_DATA_HOME:-${HOME}/.local/share}
+XDG_STATE_HOME=${XDG_STATE_HOME:-${HOME}/.local/state}
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME}/.config}
-
-# Arrange so we know where the user cache is on this system.
 XDG_CACHE_HOME=${XDG_CACHE_HOME:-${HOME}/.cache}
 
 # Location of the directories where we can store shortcut to environments that
@@ -77,6 +77,11 @@ DEW_DOCKER=${DEW_DOCKER:-0}
 # This is the name for the container to create, when empty, the default, a name
 # will be generated out of the image used for the container to ease recognition.
 DEW_NAME=${DEW_NAME:-}
+
+# Should we mount the XDG directories into the container? When this is not
+# empty, directories with the content of this variable as their basename will be
+# created under this user, then passed to the container.
+DEW_XDG=${DEW_XDG:-}
 
 # Should we mount the current directory at the same location inside the
 # destination container. In addition, when the mount is created, the working
@@ -123,6 +128,7 @@ parseopts \
     o,opts,options OPTION OPTS - "Options blindly passed to docker run" \
     s,shell OPTION SHELL - "Shell to run interactively, default is empty, meaning a good guess. Set to - to leave the entrypoint unchanged." \
     rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
+    xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     h,help FLAG @HELP - "Print this help and exit" \
@@ -137,6 +143,26 @@ _ENV=$(set | grep -E '^(DEW_|MG_)')
 if [ "$#" = 0 ]; then
   die "You must at least provide the name of an image"
 fi
+
+# Get the value of the variable passed as a parameter, without running eval.
+value_of() {
+  set |
+    grep -E "^${1}\s*=" |
+    sed -E -e "s/^${1}\s*=\s*//" -e "s/^'//" -e "s/'\$//"
+}
+
+# Create the XDG directory of type $2 for the tool named $1.
+xdg() {
+  d=$(value_of "XDG_${2}_HOME")/$1
+  if ! [ -d "$d" ]; then
+    log_info "Creating XDG $(to_lower "$2") directory at $d"
+    mkdir -p "$d"
+  fi
+
+  if [ -d "$d" ]; then
+    printf %s\\n "$d"
+  fi
+}
 
 # Download the url passed as the first argument to the destination path passed
 # as a second argument. The destination will be the same as the basename of the
@@ -210,10 +236,7 @@ fi
 # Download Docker client at the version specified by DEW_DOCKER_VERSION into the
 # XDG cache so that it can be injected into the container.
 if [ "$DEW_DOCKER" = "1" ]; then
-  if ! [ -d "${XDG_CACHE_HOME}/dew" ]; then
-    log_info "Creating local cache for Docker client binaries"
-    mkdir -p "${XDG_CACHE_HOME}/dew"
-  fi
+  xdg dew CACHE > /dev/null
   if ! [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
     log_notice "Downloading Docker client v$DEW_DOCKER_VERSION"
     tmpdir=$(mktemp -d)
@@ -244,7 +267,19 @@ cmd="docker run \
 # socket (you still have provide a CLI through injecting the Docker client with
 # -d)
 if [ -n "$DEW_SOCK" ]; then
-  cmd="$cmd -v "${DEW_SOCK}:${DEW_SOCK}""
+  cmd="$cmd -v \"${DEW_SOCK}:${DEW_SOCK}\""
+fi
+
+# Create and mount XDG directories. We don't only create XDG directories when
+# they do not exist, but also an extra directory under them, named after the
+# value of DEW_XDG. This provides configuration isolation, as, by default, the
+# container will only see the XDG configuration that was explicitely passed, but
+# not the content of the other XDG directories.
+if [ -n "$DEW_XDG" ]; then
+  for type in DATA STATE CONFIG CACHE; do
+    d=$(xdg "$DEW_XDG" "$type")
+    cmd="$cmd -v \"${d}:${d}\""
+  done
 fi
 
 # Automatically mount the current directory and make it the current directory
