@@ -23,25 +23,8 @@ abspath() {
 # facilitate location.
 DEW_ROOTDIR=$( cd -P -- "$(dirname -- "$(command -v -- "$(abspath "$0")")")" && pwd -P )
 DEW_LIBPATH=${DEW_LIBPATH:-${DEW_ROOTDIR}/libexec/docker-rebase/lib/mg.sh}
-
-# Look for modules passed as parameters in the DEW_LIBPATH and source them.
-# Modules are required so fail as soon as it was not possible to load a module
-module() {
-  for module in "$@"; do
-    for d in $(printf %s\\n "$DEW_LIBPATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
-      if [ -f "${d}/${module}.sh" ]; then
-        # shellcheck disable=SC1090
-        . "${d}/${module}.sh"
-        unset module; # Use the variable as a marker for module found.
-        break
-      fi
-    done
-    if [ -n "${module:-}" ]; then
-      echo "Cannot find module $module in $DEW_LIBPATH !" >& 2
-      exit 1
-    fi
-  done
-}
+# shellcheck source=./libexec/docker-rebase/lib/mg.sh/bootstrap.sh disable=SC1091
+. "${DEW_LIBPATH%/}/bootstrap.sh"
 
 # Source in all relevant modules. This is where most of the "stuff" will occur.
 module log locals options text
@@ -51,6 +34,7 @@ XDG_DATA_HOME=${XDG_DATA_HOME:-${HOME}/.local/share}
 XDG_STATE_HOME=${XDG_STATE_HOME:-${HOME}/.local/state}
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-${HOME}/.config}
 XDG_CACHE_HOME=${XDG_CACHE_HOME:-${HOME}/.cache}
+XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/${USER}}
 
 # Location of the directories where we can store shortcut to environments that
 # are important to us. The default is the config directory under this
@@ -152,17 +136,29 @@ value_of() {
 }
 
 # Create the XDG directory of type $2 for the tool named $1.
-xdg() {
-  d=$(value_of "XDG_${2}_HOME")/$1
+xdg() (
+  if [ -z "${1:-}" ]; then
+    d=$(value_of "XDG_${2}_${3:-HOME}")
+  else
+    d=$(value_of "XDG_${2}_${3:-HOME}")/$1
+  fi
   if ! [ -d "$d" ]; then
-    log_info "Creating XDG $(to_lower "$2") directory at $d"
-    mkdir -p "$d"
+    if mkdir -p "$d" 2>/dev/null; then
+      log_info "Created XDG $(to_lower "$2") directory at $d"
+    elif [ "${4:-0}" = "1" ]; then
+      if [ -z "${1:-}" ]; then
+        d=$(mktemp -dt "tmp-${MG_CMDNAME}-$$-$(to_lower "$2").XXXXXX")
+      else
+        d=$(mktemp -dt "tmp-${MG_CMDNAME}-$$-$(to_lower "$2")-${1}.XXXXXX")
+      fi
+      log_info "Created temporary XDG $(to_lower "$2") directory at $d, this is not XDG compliant and might have unknown side-effects"
+    fi
   fi
 
   if [ -d "$d" ]; then
     printf %s\\n "$d"
   fi
-}
+)
 
 # Download the url passed as the first argument to the destination path passed
 # as a second argument. The destination will be the same as the basename of the
@@ -279,7 +275,13 @@ if [ -n "$DEW_XDG" ]; then
   for type in DATA STATE CONFIG CACHE; do
     d=$(xdg "$DEW_XDG" "$type")
     cmd="$cmd -v \"${d}:${d}\""
+    export XDG_${type}_HOME
   done
+
+  d=$(xdg "" RUNTIME DIR 1)
+  export XDG_RUNTIME_DIR
+  chmod 0700 "$d"
+  cmd="$cmd -v \"${d}:${d}\""
 fi
 
 # Automatically mount the current directory and make it the current directory
@@ -427,6 +429,12 @@ set | grep "^DEW_" | while IFS= read -r line; do
   log_trace "$line"
 done
 log_trace "Running: $cmd"
+
+# Remove all temporary XDG stuff. Done here to avoid sub-shell exiting to
+# trigger cleanup.
+if [ -z "$DEW_XDG" ]; then
+  at_exit rm -rf "${TMPDIR:-/tmp}/tmp-${MG_CMDNAME}-$$-*"
+fi
 
 # Now run the docker command. We evaluate to be able to replace variables by
 # their values.
