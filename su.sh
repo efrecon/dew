@@ -143,15 +143,20 @@ else
   if [ -n "${DEW_GID:-}" ]; then
     if [ -f "/etc/group" ]; then
       # Create the group if it does not already exist at the same GID
-      if ! cut -d: -f3 /etc/group | grep -q "$DEW_GID"; then
+      if ! cut -d: -f3 /etc/group | grep -qE "^${DEW_GID}\$"; then
         create_group
       fi
     fi
 
     # Create the user if it does not already exist. Arrange for the default
-    # shell to be the one discovered at the beginning of this script.
+    # shell to be the one discovered at the beginning of this script. If a user
+    # with that UID already exists, switch the username to the one already
+    # registered for the UID, as nothing else would work.
     if [ -f "/etc/passwd" ] && [ -n "${DEW_UID:-}" ]; then
-      if ! cut -d: -f1 /etc/passwd | grep -q "$USER"; then
+      if cut -d: -f3 /etc/passwd | grep -q "^${DEW_UID}\$"; then
+        USER=$(grep -E "^[a-zA-Z0-9._-]+:x:${DEW_UID}" /etc/passwd|cut -d: -f1)
+        log "Picked $USER, matching user id: $DEW_UID"
+      else
         create_user
       fi
     fi
