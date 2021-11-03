@@ -171,7 +171,7 @@ dew.sh --docker alpine
 To get an interactive python, you could run the following command:
 
 ```shell
-dew python
+dew.sh python
 ```
 
 Setting up python uses a specific environment configuration
@@ -179,6 +179,30 @@ Setting up python uses a specific environment configuration
 used by `dew` when creating the container. In practice, this sets the shell to
 use for the environment to `-`, which is understood by `dew` as running the
 default `python` image from the Docker hub, but as your regular user.
+
+### Node
+
+To get a bash prompt where you can run both `npm` and `node`, run the following
+command. The entrypoint for the node image is `node`, but the default for `dew`
+when running with impersonation is to inject its own [`su.sh`](./su.sh) script
+as an entrypoint. The script will ensure a minimal HOME environment for a user
+named after yours. This is why the following command provides a bash prompt,
+rather than a `node` prompt. In that specific case, you might also notice that
+you might become the user called `node` (and not your username). This is because
+the default Docker node image already has a user at uid `1000` with the name
+`node`.
+
+```shell
+dew.sh node
+```
+
+If you instead want to get an interactive `node` prompt, run the following. This
+suppresses injection of [`su.sh`](./su.sh) as described above, reverting to the
+regular behaviour.
+
+```shell
+dew.sh -s - node
+```
 
 ### Tcl
 
