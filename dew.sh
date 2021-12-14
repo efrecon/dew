@@ -116,7 +116,7 @@ parseopts \
     rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
     xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
-    p,path,paths OPTION PATHS - "List of paths specification to enforce presence/access" \
+    p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
