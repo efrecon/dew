@@ -97,6 +97,8 @@ DEW_REBASER=${DEW_REBASER:-"${DEW_ROOTDIR%/}/libexec/docker-rebase/rebase.sh"}
 # Comment to print out before running
 DEW_COMMENT=${DEW_COMMENT:-""}
 
+DEW_PATHS=${DEW_PATHS:-""}
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -114,6 +116,7 @@ parseopts \
     rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
     xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
+    p,path,paths OPTION PATHS - "List of paths specification to enforce presence/access" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
@@ -244,6 +247,51 @@ if [ "$DEW_DOCKER" = "1" ]; then
     mv "${tmpdir}/docker/docker" "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION"
     rm -rf "$tmpdir"
   fi
+fi
+
+# Create files/directories prior to starting up the container. This can be used
+# to generate (empty) RC files and similar. Format is any number of
+# specifications, fields separated by colon sign in order:
+# - (full) path to file/directory
+# - Type of path to create f or - (or empty, default): file, d: directory
+# - chmod access, i.e. 0700 or ug+rw. When empty, will be as default
+# - Name/Id of owner for path
+# - Name/Id of group for path
+if [ -n "$DEW_PATHS" ]; then
+  for spec in $DEW_PATHS; do
+    path=$(printf %s:::::\\n "$spec" | cut -d: -f1)
+    if [ -n "$path" ]; then
+      type=$(printf %s:::::\\n "$spec" | cut -d: -f2)
+      case "$type" in
+        f | - | "")
+          log_debug "Creating file: $path"
+          touch "$path";;
+        d )
+          log_debug "Creating directory: $path"
+          mkdir -p "$path";;
+        * )
+          log_warn "$type is not a recognised path type!";;
+      esac
+
+      if [ -f "$path" ] || [ -d "$path" ]; then
+        chmod=$(printf %s:::::\\n "$spec" | cut -d: -f3)
+        if [ -n "$chmod" ]; then
+          chmod "$chmod" "$path"
+        fi
+        owner=$(printf %s:::::\\n "$spec" | cut -d: -f4)
+        group=$(printf %s:::::\\n "$spec" | cut -d: -f5)
+        if [ -n "$owner" ] && [ -n "$group" ]; then
+          chown "${owner}:${group}" "$path"
+        elif [ -n "$owner" ]; then
+          chown "${owner}" "$path"
+        elif [ -n "$group" ]; then
+          chgrp "${group}" "$path"
+        fi
+      else
+        log_error "Could not create path $path"
+      fi
+    fi
+  done
 fi
 
 log_trace "Kickstarting a container based on $DEW_IMAGE"
