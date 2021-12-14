@@ -96,7 +96,7 @@ container has accessed to the `$HOME` variable and that it matches your own
 `$HOME` on the host (the `$` is escaped and the variable is resolved once in the
 container).
 
-```
+```text
 /home/emmanuel
 /home/emmanuel/dev
 /home/emmanuel/dev/foss
@@ -378,6 +378,27 @@ running in the container will not be able to read any other XDG configuration
 files than the selected ones.
 
   [XDG]: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+
+### `DEW_PATHS`
+
+This variable should contain a space-separated list of path specifications.
+These specifications will point to files and/or directories that will be created
+before the container is created. This can be used in addition to the
+[`DEW_XDG`](#dew_xdg) variable for hidden setting files and similar. Path
+specifications should contain the following items, separated by the colon `:`
+sign:
+
++ The path to the file or directory to create (mandatory)
++ The type of the path: `f` or `-` for a file, `d` for a directory. When empty,
+  the default, a file will be created through `touch`.
++ The access specification for the path, compatible with the `chmod` command,
+  e.g. `0700` or `ug+rw`. When empty, the default, no `chmod` will be performed
+  and the file or directory will be created with the user account's default
+  mask.
++ The owner of the file (a name or an integer). When empty, the default, the
+  owner will not be changed and be the user running the script.
++ The group owner of the file (a name or an integer). When empty, the default,
+  the group will not be changed and be the one of the user running the script.
 
 ## Implementation
 
