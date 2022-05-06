@@ -93,15 +93,14 @@ To verify this, assuming that you have a copy of this repository and its
 command from that directory.
 
 ```shell
-./dew.sh busybox find \$HOME -type d | grep -v .git
+./dew.sh busybox find $HOME -type d | grep -v .git
 ```
 
 This should output the following. `.git` information has been removed to keep
 this output sizeable. You can verify that only the relevant parts of the
 filesystem have been made available to the container, but also that the
 container has accessed to the `$HOME` variable and that it matches your own
-`$HOME` on the host (the `$` is escaped and the variable is resolved once in the
-container).
+`$HOME` on the host.
 
 ```text
 /home/emmanuel
