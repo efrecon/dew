@@ -251,7 +251,7 @@ fi
 # Cut out the possible tag/sha256 at the end of the image name and extract the
 # main name to be used as part of the automatically generated container name.
 # ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
-bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$~~')")
+bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')")
 [ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
 DEW_IMAGE=$1
 shift; # Jump to the arguments
