@@ -398,7 +398,7 @@ if [ "$DEW_IMPERSONATE" = "1" ]; then
     if printf %s\\n "$DEW_BLACKLIST" | grep -q "$v"; then
       log_trace "Ignoring environment variable $v from blacklist"
     else
-      set -- --env "${v}=$(printf '$%s\n' "$v"|envsubst)" "$@"
+      set -- --env "${v}=$(eval "echo \$$v")" "$@"
     fi
   done
 fi
