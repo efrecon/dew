@@ -53,6 +53,15 @@ create_group() {
   esac
 }
 
+group_name() {
+  while IFS= read -r line; do
+    if [ "$(printf %s\\n "$line" | cut -d: -f3)" = "$1" ]; then
+      printf %s\\n "$line" | cut -d: -f1
+      return
+    fi
+  done < /etc/group
+}
+
 # Create a user $USER, belonging to the group of the same name (created by
 # function above), with identifier $DEW_UID and shell $SHELL, as detected at the
 # when this script starts
@@ -75,7 +84,7 @@ create_user() {
       adduser \
         -h "$HOME" \
         -s "$SHELL" \
-        -G "$USER" \
+        -G "$(group_name "$DEW_GID")" \
         -D \
         -u "$DEW_UID" \
         -g "" \
@@ -141,11 +150,9 @@ else
   # group will be named after the user. Once done, create a user inside that
   # group.
   if [ -n "${DEW_GID:-}" ]; then
-    if [ -f "/etc/group" ]; then
-      # Create the group if it does not already exist at the same GID
-      if ! cut -d: -f3 /etc/group | grep -qE "^${DEW_GID}\$"; then
-        create_group
-      fi
+    # Create the group if there isn't one at the same GID
+    if [ -f "/etc/group" ] && ! cut -d: -f3 /etc/group | grep -qE "^${DEW_GID}\$"; then
+      create_group
     fi
 
     # Create the user if it does not already exist. Arrange for the default
