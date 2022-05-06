@@ -1,6 +1,6 @@
 # Docker EveryWhere, `dew`
 
-We are in 2021! Docker can be used to provide the same working environment
+We are past 2020! Docker can be used to provide the same working environment
 across platforms. `dew` aims at development workflows consisting of Docker
 containers based on images with the tooling of your requiring. These containers
 will run from within the current directory and as your current user inside the
@@ -15,7 +15,7 @@ run most activities from within containers in a transparent way. These
 containers will have your shell code, your configuration, but all binaries and
 dependencies will remain in the container and disappear automatically once done.
 
-For the technically enclined, `dew` is a shortcut to the command below.
+For the technically inclined, `dew` is a shortcut to the command below.
 Actually, the [implementation](#implementation) is a bit more complex, but in
 the same spirit:
 
@@ -35,7 +35,8 @@ to read configurations for known environments. This minimises typing and
 automates all the necessary command-line options for making a given environment
 possible. Configurations are simply `env` files placed in a sub-directory of the
 `$XDG_CONFIG_HOME` directory, or under the [`config`](./config/) directory of
-this repository.
+this repository. To get a list of known configurations, run `dew` with the
+`-l` option.
 
   [lope]: https://github.com/Crazybus/lope
 
@@ -46,6 +47,12 @@ script will not even start!
 ```shell
 git clone --recursive https://github.com/efrecon/docker-images.git
 git submodule update --init --recursive
+```
+
+To catch up with changes, run the following:
+
+```shell
+git submodule update --recursive --remote
 ```
 
   [submodules]: https://git-scm.com/book/en/v2/Git-Tools-Submodules
@@ -261,7 +268,7 @@ dew.sh lazydocker
 double-dash `--` to mark the end of the options, followed by the name of a
 Docker image (or the name of a tailored environment found under the
 configuration path), followed by arguments that will be passed to the Docker
-comainter at its creation (the `COMMAND` from a Dockerfile). Pass the option
+container at its creation (the `COMMAND` from a Dockerfile). Pass the option
 `--help` to get a list of known options.
 
 ## Environment Variables
