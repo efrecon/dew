@@ -49,6 +49,12 @@ git clone --recursive https://github.com/efrecon/docker-images.git
 git submodule update --init --recursive
 ```
 
+To catch up with changes, run the following:
+
+```shell
+git submodule update --recursive --remote
+```
+
   [submodules]: https://git-scm.com/book/en/v2/Git-Tools-Submodules
 
 ## Examples
