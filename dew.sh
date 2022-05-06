@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 
 # If editing from Windows. Choose LF as line-ending
 
@@ -7,12 +7,23 @@ set -eu
 # Find out where dependent modules are and load them at once before doing
 # anything. This is to be able to use their services as soon as possible.
 
-# This is a readlink -f implementation so this script can run on MacOS
+# This is a readlink -f implementation so this script can (perhaps) run on MacOS
 abspath() {
+  is_abspath() {
+    case "$1" in
+      /* | ~*) true;;
+      *) false;;
+    esac
+  }
+
   if [ -d "$1" ]; then
     ( cd -P -- "$1" && pwd -P )
   elif [ -L "$1" ]; then
-    abspath "$(dirname "$1")/$(stat -c %N "$1" | awk -F ' -> ' '{print $2}' | cut -c 2- | rev | cut -c 2- | rev)"
+    if is_abspath "$(readlink "$1")"; then
+      abspath "$(readlink "$1")"
+    else
+      abspath "$(dirname "$1")/$(readlink "$1")"
+    fi
   else
     printf %s\\n "$(abspath "$(dirname "$1")")/$(basename "$1")"
   fi
@@ -27,7 +38,7 @@ DEW_LIBPATH=${DEW_LIBPATH:-${DEW_ROOTDIR}/libexec/docker-rebase/lib/mg.sh}
 . "${DEW_LIBPATH%/}/bootstrap.sh"
 
 # Source in all relevant modules. This is where most of the "stuff" will occur.
-module log locals options text
+module log locals options text portability
 
 # Arrange so we know where XDG directories are on this system.
 XDG_DATA_HOME=${XDG_DATA_HOME:-${HOME}/.local/share}
@@ -333,22 +344,23 @@ fi
 
 log_trace "Kickstarting a container based on $DEW_IMAGE"
 
-# The base command is to arrange for the container to automatically be removed
-# once stopped, to add an init system to make sure we can capture signals and to
-# share the host network.
-cmd="docker run \
-      --rm \
-      --init \
-      --network host \
-      -v /etc/localtime:/etc/localtime:ro \
-      --name $DEW_NAME"
+# Remember number of arguments we had after the name of the image.
+__DEW_NB_ARGS="$#"
+
+# Add image at once
+set -- "$DEW_IMAGE" "$@"
+
+# Add blindly any options
+if [ -n "$DEW_OPTS" ]; then
+  set -- $DEW_OPTS "$@"
+fi
 
 # Mount UNIX domain docker socket into container, if relevant. Note in most
 # case, the user remapped into the container will also have access to the Docker
 # socket (you still have provide a CLI through injecting the Docker client with
 # -d)
 if [ -n "$DEW_SOCK" ]; then
-  cmd="$cmd -v \"${DEW_SOCK}:${DEW_SOCK}\""
+  set -- -v "${DEW_SOCK}:${DEW_SOCK}" "$@"
 fi
 
 # Create and mount XDG directories. We don't only create XDG directories when
@@ -359,27 +371,23 @@ fi
 if [ -n "$DEW_XDG" ]; then
   for type in DATA STATE CONFIG CACHE; do
     d=$(xdg "$DEW_XDG" "$type")
-    cmd="$cmd -v \"${d}:${d}\""
+    set -- -v "${d}:${d}" "$@"
     export XDG_${type}_HOME
   done
 
   d=$(xdg "" RUNTIME DIR 1)
   export XDG_RUNTIME_DIR
   chmod 0700 "$d"
-  cmd="$cmd -v \"${d}:${d}\""
+  set -- -v "${d}:${d}" "$@"
 fi
 
 # Automatically mount the current directory and make it the current directory
 # inside the container as well.
 if [ "$DEW_MOUNT" = "1" ]; then
-  cmd="$cmd \
-        -v $(pwd):$(pwd) \
-        -w $(pwd)"
-fi
-
-# Add blindly any options
-if [ -n "$DEW_OPTS" ]; then
-  cmd="$cmd $DEW_OPTS"
+  set -- \
+        -v "$(pwd):$(pwd)" \
+        -w "$(pwd)" \
+        "$@"
 fi
 
 # When impersonating pass all environment variables that should be to the
@@ -390,7 +398,7 @@ if [ "$DEW_IMPERSONATE" = "1" ]; then
     if printf %s\\n "$DEW_BLACKLIST" | grep -q "$v"; then
       log_trace "Ignoring environment variable $v from blacklist"
     else
-      cmd="$cmd --env ${v}=\"\$$v\""
+      set -- --env "${v}=$(printf '$%s\n' "$v"|envsubst)" "$@"
     fi
   done
 fi
@@ -400,17 +408,18 @@ fi
 # the prompt (or other programs).
 if [ "$DEW_DOCKER" = "1" ]; then
   if [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
-    cmd="$cmd -v ${XDG_CACHE_HOME}/dew/docker_${DEW_DOCKER_VERSION}:${DEW_INSTALLDIR%/}/docker:ro"
+    set -- -v "${XDG_CACHE_HOME}/dew/docker_${DEW_DOCKER_VERSION}:${DEW_INSTALLDIR%/}/docker:ro" "$@"
   fi
 fi
 
-if is_true "$DEW_INTERACTIVE" || { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ] && [ "$#" = "0" ]; }; then
-  cmd="$cmd \
+if is_true "$DEW_INTERACTIVE" || { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ] && [ "$__DEW_NB_ARGS" = "0" ]; }; then
+  set -- \
         -it \
-        -a stdin -a stdout -a stderr"
+        -a stdin -a stdout -a stderr \
+        "$@"
 fi
 
-if [ "$#" -gt 0 ]; then
+if [ "$__DEW_NB_ARGS" -gt 0 ]; then
   if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
     # We have specified a "shell", we understand this as specifying a different
     # entrypoint. If impersonation is on, then we behave more or less as when
@@ -418,28 +427,27 @@ if [ "$#" -gt 0 ]; then
     # arguments, but with a different entrypoint.
     if [ "$DEW_IMPERSONATE" = "1" ]; then
       if [ "$MG_VERBOSITY" = "trace" ]; then
-        cmd="$cmd -e DEW_DEBUG=1"
+        set -- -e "DEW_DEBUG=1" "$@"
       fi
-      cmd="$cmd \
-            -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+      set -- \
+            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
             -e DEW_UID=$(id -u) \
             -e DEW_GID=$(id -g) \
-            -e DEW_SHELL=$DEW_SHELL \
-            -e HOME=$HOME \
-            -e USER=$USER \
-            --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
-            $DEW_IMAGE $*"
+            -e "DEW_SHELL=$DEW_SHELL" \
+            -e "HOME=$HOME" \
+            -e "USER=$USER" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+             "$@"
     else
-      cmd="$cmd --entrypoint \"$DEW_SHELL\" $DEW_IMAGE $*"
+      set -- --entrypoint "$DEW_SHELL" "$@"
     fi
   else
     # When we have specified arguments at the command line, we expect to be
     # calling a program in a non-interactive manner. Elevate to the user if
     # necessary and run
     if [ "$DEW_IMPERSONATE" = "1" ]; then
-      cmd="$cmd --user $(id -u):$(id -g)"
+      set -- --user "$(id -u):$(id -g)" "$@"
     fi
-    cmd="$cmd $DEW_IMAGE $*"
   fi
 elif [ -n "$DEW_SHELL" ]; then
   # If we have no other argument than a Docker image (or a configured argument),
@@ -450,33 +458,32 @@ elif [ -n "$DEW_SHELL" ]; then
   # set of arguments from the command).
   if [ "$DEW_SHELL" = "-" ]; then
     if [ "$DEW_IMPERSONATE" = "1" ]; then
-      cmd="$cmd --user $(id -u):$(id -g)"
+      set -- --user "$(id -u):$(id -g)" "$@"
     fi
-    cmd="$cmd $DEW_IMAGE"
   else
     # If the shell was specified, we understand this as trying to override the
     # entrypoint. We become the same user as the one running dew, after having
     # setup a minimial environment. This will run the specified shell with the
     # proper privieges.
     if [ "$MG_VERBOSITY" = "trace" ]; then
-      cmd="$cmd -e DEW_DEBUG=1"
+      set -- -e "DEW_DEBUG=1" "$@"
     fi
     if [ "$DEW_IMPERSONATE" = "1" ]; then
-      cmd="$cmd \
-            -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+      set -- \
+            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
             -e DEW_UID=$(id -u) \
             -e DEW_GID=$(id -g) \
-            -e DEW_SHELL=$DEW_SHELL \
-            -e HOME=$HOME \
-            -e USER=$USER \
-            --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
-            $DEW_IMAGE"
+            -e "DEW_SHELL=$DEW_SHELL" \
+            -e "HOME=$HOME" \
+            -e "USER=$USER" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+             "$@"
     else
-      cmd="$cmd \
-            -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
-            -e DEW_SHELL=$DEW_SHELL \
-            --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
-            $DEW_IMAGE"
+      set -- \
+            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            -e "DEW_SHELL=$DEW_SHELL" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+             "$@"
     fi
   fi
 else
@@ -484,24 +491,34 @@ else
   # privileges, i.e. inside an encapsulated environment, minimally mimicing the
   # current user.
   if [ "$MG_VERBOSITY" = "trace" ]; then
-    cmd="$cmd -e DEW_DEBUG=1"
+    set -- -e "DEW_DEBUG=1" "$@"
   fi
   if [ "$DEW_IMPERSONATE" = "1" ]; then
-    cmd="$cmd \
-          -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
+    set -- \
+          -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
           -e DEW_UID=$(id -u) \
           -e DEW_GID=$(id -g) \
-          -e HOME=$HOME \
-          -e USER=$USER \
-          --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
-          $DEW_IMAGE"
+          -e "HOME=$HOME" \
+          -e "USER=$USER" \
+          --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+            "$@"
   else
-    cmd="$cmd \
-          -v ${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro \
-          --entrypoint ${DEW_INSTALLDIR%/}/su.sh \
-          $DEW_IMAGE"
+    set -- \
+          -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+          --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+            "$@"
   fi
 fi
+
+# The base command is to arrange for the container to automatically be removed
+# once stopped, to add an init system to make sure we can capture signals and to
+# share the host network.
+set -- docker run \
+          --rm \
+          --init \
+          --network host \
+          -v /etc/localtime:/etc/localtime:ro \
+          --name "$DEW_NAME" "$@"
 
 # Print out comment (same destination as logging, i.e. stderr)
 if [ -n "$DEW_COMMENT" ]; then
@@ -513,7 +530,7 @@ fi
 set | grep "^DEW_" | while IFS= read -r line; do
   log_trace "$line"
 done
-log_trace "Running: $cmd"
+log_trace "Running: $*"
 
 # Remove all temporary XDG stuff. Done here to avoid sub-shell exiting to
 # trigger cleanup.
@@ -521,6 +538,5 @@ if [ -z "$DEW_XDG" ]; then
   at_exit rm -rf "${TMPDIR:-/tmp}/tmp-${MG_CMDNAME}-$$-*"
 fi
 
-# Now run the docker command. We evaluate to be able to replace variables by
-# their values.
-eval "$cmd"
+# Now run the docker command
+exec "$@"
