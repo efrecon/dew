@@ -99,6 +99,9 @@ DEW_COMMENT=${DEW_COMMENT:-""}
 
 DEW_PATHS=${DEW_PATHS:-""}
 
+# Should we just list available configs
+DEW_LIST=${DEW_LISt:-"0"}
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -118,6 +121,7 @@ parseopts \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
+    l,list FLAG LIST - "Print out list of known configs and exit" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
 
@@ -127,7 +131,7 @@ shift "$_begin"
 # Store all our vars
 _ENV=$(set | grep -E '^(DEW_|MG_)')
 
-if [ "$#" = 0 ]; then
+if [ "$#" = 0 ] && [ "$DEW_LIST" = "0" ]; then
   die "You must at least provide the name of an image"
 fi
 
@@ -199,6 +203,39 @@ config() {
     fi
   done
 }
+
+wrap() {
+  stack_let max=
+  stack_let l_indent=
+  stack_let wrap=${3:-80}
+
+  #shellcheck disable=SC2034 # We USE l_indent to compute wrapping max!
+  l_lindent=${#2}
+  #shellcheck disable=SC2154 # We USE l_indent to compute wrapping max!
+  max=$((wrap - l_indent))
+  printf "%s\n" "$1" |fold -s -w "$max"|sed -E "s/^(.*)$/$2\\1/g"
+  stack_unlet max l_indent wrap
+}
+
+
+if [ "$DEW_LIST" = "1" ]; then
+  for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
+    if [ -d "$d" ]; then
+      for f in ${d}/*; do
+        if [ -f "$f" ]; then
+          if check_config "$f"; then
+            printf %s\\n "$(basename "$f")" | sed -E -e 's/.env$//'
+            wrap "$(sed -E '/DEW_/q' "$f" | grep -E '^#' | sed -E 's/^#[[:space:]]*//g' | tr '
+' ' ')" "  "
+            printf \\n
+          fi
+        fi
+      done
+    fi
+  done
+  exit
+fi
+
 
 # Cut out the possible tag/sha256 at the end of the image name and extract the
 # main name to be used as part of the automatically generated container name.
