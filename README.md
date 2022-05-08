@@ -406,6 +406,14 @@ sign:
 + The group owner of the file (a name or an integer). When empty, the default,
   the group will not be changed and be the one of the user running the script.
 
+### `DEW_RUNTIME`
+
+This variable should contain the name of a runtime client able to create OCI
+containers using the docker CLI command-line options. By default, this is an
+empty string, in which case the first existing client out of the list contained
+in the `DEW_RUNTIMES` (note the terminating `S`) will be picked. `docker` is
+first in this list for backwards compatibility.
+
 ## Implementation
 
 In many cases, this script goes a few steps further than the `docker run`
