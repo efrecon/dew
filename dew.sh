@@ -57,7 +57,7 @@ DEW_SOCK=${DEW_SOCK:-/var/run/docker.sock}
 
 # Comma separated list of environment variable names that will automatically be
 # ignored in the destination container.
-DEW_BLACKLIST=${DEW_BLACKLIST:-SSH_AUTH_SOCK,TMPDIR,PATH}
+DEW_BLACKLIST=${DEW_BLACKLIST:-SSH_AUTH_SOCK,TMPDIR,PATH,LC_TIME,LC_CTYPE,LANG}
 
 # Should we impersonate the user in the container, i.e. run with the same used
 # id (and group).
@@ -113,6 +113,14 @@ DEW_PATHS=${DEW_PATHS:-""}
 # Should we just list available configs
 DEW_LIST=${DEW_LISt:-"0"}
 
+# List of runtimes to try when runtime is empty, in this order, first match will
+# be used.
+DEW_RUNTIMES=${DEW_RUNTIMES:-"docker podman nerdctl"}
+
+# Runtime to use, when empty, the default, runtimes from DEW_RUNTIMES will be
+# used (first match).
+DEW_RUNTIME=${DEW_RUNTIME:-""}
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -132,6 +140,7 @@ parseopts \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
+    t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
     l,list FLAG LIST - "Print out list of known configs and exit" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
@@ -263,6 +272,19 @@ if [ "$DEW_LIST" = "1" ]; then
   exit
 fi
 
+# Pick a runtime
+if [ -z "$DEW_RUNTIME" ]; then
+  for r in $DEW_RUNTIMES; do
+    if command -v "$r" >/dev/null 2>&1; then
+      DEW_RUNTIME=$r
+      log_debug "Using $DEW_RUNTIME as runtime"
+      break
+    fi
+  done
+  if [ -z "$DEW_RUNTIME" ]; then
+    die "Cannot find a container runtime, tried: $DEW_RUNTIMES"
+  fi
+fi
 
 # Cut out the possible tag/sha256 at the end of the image name and extract the
 # main name to be used as part of the automatically generated container name.
@@ -445,15 +467,23 @@ if [ "$__DEW_NB_ARGS" -gt 0 ]; then
       if [ "$MG_VERBOSITY" = "trace" ]; then
         set -- -e "DEW_DEBUG=1" "$@"
       fi
-      set -- \
-            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-            -e DEW_UID=$(id -u) \
-            -e DEW_GID=$(id -g) \
-            -e "DEW_SHELL=$DEW_SHELL" \
-            -e "HOME=$HOME" \
-            -e "USER=$USER" \
-            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-             "$@"
+      if [ "$DEW_RUNTIME" = "podman" ]; then
+        set -- \
+              -e "HOME=$HOME" \
+              -e "USER=$USER" \
+              --entrypoint "$DEW_SHELL" \
+              "$@"
+      else
+        set -- \
+              -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+              -e DEW_UID=$(id -u) \
+              -e DEW_GID=$(id -g) \
+              -e "DEW_SHELL=$DEW_SHELL" \
+              -e "HOME=$HOME" \
+              -e "USER=$USER" \
+              --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+              "$@"
+      fi
     else
       set -- --entrypoint "$DEW_SHELL" "$@"
     fi
@@ -485,21 +515,34 @@ elif [ -n "$DEW_SHELL" ]; then
       set -- -e "DEW_DEBUG=1" "$@"
     fi
     if [ "$DEW_IMPERSONATE" = "1" ]; then
-      set -- \
-            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-            -e DEW_UID=$(id -u) \
-            -e DEW_GID=$(id -g) \
-            -e "DEW_SHELL=$DEW_SHELL" \
-            -e "HOME=$HOME" \
-            -e "USER=$USER" \
-            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-             "$@"
+      if [ "$DEW_RUNTIME" = "podman" ]; then
+        set -- \
+              -e "HOME=$HOME" \
+              -e "USER=$USER" \
+              --entrypoint "$DEW_SHELL" \
+              "$@"
+      else
+        set -- \
+              -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+              -e DEW_UID=$(id -u) \
+              -e DEW_GID=$(id -g) \
+              -e "DEW_SHELL=$DEW_SHELL" \
+              -e "HOME=$HOME" \
+              -e "USER=$USER" \
+              --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+              "$@"
+      fi
     else
-      set -- \
-            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-            -e "DEW_SHELL=$DEW_SHELL" \
-            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-             "$@"
+      if [ "$DEW_RUNTIME" = "podman" ]; then
+        set --  --entrypoint "$DEW_SHELL" \
+                "$@"
+      else
+        set -- \
+              -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+              -e "DEW_SHELL=$DEW_SHELL" \
+              --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+              "$@"
+      fi
     fi
   fi
 else
@@ -510,31 +553,44 @@ else
     set -- -e "DEW_DEBUG=1" "$@"
   fi
   if [ "$DEW_IMPERSONATE" = "1" ]; then
-    set -- \
-          -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-          -e DEW_UID=$(id -u) \
-          -e DEW_GID=$(id -g) \
-          -e "HOME=$HOME" \
-          -e "USER=$USER" \
-          --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+    if [ "$DEW_RUNTIME" = "podman" ]; then
+      set -- \
+            -e "HOME=$HOME" \
+            -e "USER=$USER" \
             "$@"
+    else
+      set -- \
+            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            -e DEW_UID=$(id -u) \
+            -e DEW_GID=$(id -g) \
+            -e "HOME=$HOME" \
+            -e "USER=$USER" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+              "$@"
+    fi
   else
-    set -- \
-          -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-          --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-            "$@"
+    if [ "$DEW_RUNTIME" != "podman" ]; then
+      set -- \
+            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
+              "$@"
+    fi
   fi
 fi
 
 # The base command is to arrange for the container to automatically be removed
 # once stopped, to add an init system to make sure we can capture signals and to
 # share the host network.
-set -- docker run \
-          --rm \
-          --init \
-          --network host \
-          -v /etc/localtime:/etc/localtime:ro \
-          --name "$DEW_NAME" "$@"
+set --  --rm \
+        --init \
+        --network host \
+        -v /etc/localtime:/etc/localtime:ro \
+        --name "$DEW_NAME" "$@"
+if [ "$DEW_RUNTIME" = "podman" ]; then
+  set -- "$DEW_RUNTIME" run --userns=keep-id "$@"
+else
+  set -- "$DEW_RUNTIME" run "$@"
+fi
 
 # Print out comment (same destination as logging, i.e. stderr)
 if [ -n "$DEW_COMMENT" ]; then
