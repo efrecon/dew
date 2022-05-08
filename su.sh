@@ -39,18 +39,43 @@ distro() {
 
 # Create a user group called $USER with the identifier $DEW_GID
 create_group() {
-  log "Adding group $USER with id $DEW_GID to /etc/group"
+  log "Adding group $1 with gid $2"
   case "$(distro)" in
     ubuntu* | debian*)
-      addgroup -q --gid "$DEW_GID" "$USER";;
+      addgroup -q --gid "$2" "$1";;
     alpine*)
-      addgroup -g "$DEW_GID" "$USER";;
+      addgroup -g "$2" "$1";;
     fedora)
-      groupadd -g "$DEW_GID" "$USER";;
+      groupadd -g "$2" "$1";;
     *)
       # Go old style, just add an entry to the /etc/group file
-      printf "%s:x:%d:\n" "$USER" "$DEW_GID" >> /etc/group;;
+      printf "%s:x:%d:\n" "$1" "$2" >> /etc/group;;
   esac
+}
+
+# Make user $1 member of group $2
+group_member() {
+  if grep -qE "^${2}:" /etc/group; then
+    case "$(distro)" in
+      ubuntu* | debian*)
+        adduser "$1" "$2";;
+      alpine*)
+        addgroup "$1" "$2";;
+      fedora)
+        groupmod -a -U "$1" "$2";;
+      *)
+        # Go old style, just modify the /etc/group file
+        gid=$(grep -E "^${2}:" /etc/group|cut -d: -f3)
+        if grep -q "^${2}:" /etc/group | grep -E ':$'; then
+          sed -i "s/${2}:x:${gid}:/${2}:x:${gid}:${1}/"
+        else
+          sed -iE "s/${2}:x:${gid}:(.*)/${2}:x:${gid}:\1,${1}/"
+        fi
+        ;;
+    esac
+  else
+    log "Group $2 does not exist!"
+  fi
 }
 
 group_name() {
@@ -139,7 +164,7 @@ else
   # to lesser privileges.
 
   # Create a home for the user and make sure it is accessible for RW
-  if [ -n "$HOME" ]; then
+  if [ -n "$HOME" ] && ! [ -d "$HOME" ]; then
     log "Creating home directory $HOME, owned by ${DEW_UID:-0}:${DEW_GID:-0}"
     mkdir -p "$HOME"
     chown "${DEW_UID:-0}:${DEW_GID:-0}" "${HOME}"
@@ -152,7 +177,7 @@ else
   if [ -n "${DEW_GID:-}" ]; then
     # Create the group if there isn't one at the same GID
     if [ -f "/etc/group" ] && ! cut -d: -f3 /etc/group | grep -qE "^${DEW_GID}\$"; then
-      create_group
+      create_group "$USER" "$DEW_GID"
     fi
 
     # Create the user if it does not already exist. Arrange for the default
@@ -161,7 +186,7 @@ else
     # registered for the UID, as nothing else would work.
     if [ -f "/etc/passwd" ] && [ -n "${DEW_UID:-}" ]; then
       if cut -d: -f3 /etc/passwd | grep -q "^${DEW_UID}\$"; then
-        USER=$(grep -E "^[a-zA-Z0-9._-]+:x:${DEW_UID}" /etc/passwd|cut -d: -f1)
+        USER=$(grep -E "^[a-zA-Z0-9._-]+:[x*]:${DEW_UID}" /etc/passwd|cut -d: -f1)
         log "Picked $USER, matching user id: $DEW_UID"
       else
         create_user
@@ -176,7 +201,8 @@ else
       [ -S "$DOCKER_SOCKET" ]; then
     dgid=$(stat -c '%g' "$DOCKER_SOCKET")
     log "Making user $USER member of the group $DOCKER_GROUP with id $dgid to /etc/passwd"
-    printf "${DOCKER_GROUP}:x:%d:%s\n" "$dgid" "$USER" >> /etc/group
+    create_group "$DOCKER_GROUP" "$dgid" || true
+    group_member "$USER" "$DOCKER_GROUP" || true
   fi
 
   # Now run an interactive shell with lesser privileges, i.e. as the user that
@@ -193,8 +219,16 @@ else
       log "Becoming $USER, running $DEW_SHELL $*"
       exec su -s "$(command -v "$DEW_SHELL")" "$USER" "$@"
     fi
+  elif command -v "sudo" >/dev/null 2>&1; then
+    if [ -z "${DEW_SHELL:-}" ]; then
+      log "Becoming $USER, running $SHELL $* as set in /etc/passwd"
+      exec sudo -u "$USER" -- "$SHELL" "$@"
+    else
+      log "Becoming $USER, running $DEW_SHELL $*"
+      exec sudo -u "$USER" -- "$(command -v "$DEW_SHELL")" "$@"
+    fi
   else
-    log "Cannot find su"
+    log "Can neither find su, nor sudo"
     exit 1
   fi
 fi
