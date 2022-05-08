@@ -215,6 +215,14 @@ config() {
   done
 }
 
+# Print out summary info for configuration file passed as a parameter
+summary() {
+  printf %s\\n "$(basename "$1")" | sed -E -e 's/.env$//'
+  wrap "$(sed -E '/DEW_/q' "$1" | grep -E '^#' | sed -E 's/^#[[:space:]]*//g' | tr '
+' ' ')" "  "
+  printf \\n
+}
+
 wrap() {
   stack_let max=
   stack_let l_indent=
@@ -230,20 +238,28 @@ wrap() {
 
 
 if [ "$DEW_LIST" = "1" ]; then
-  for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
-    if [ -d "$d" ]; then
-      for f in ${d}/*; do
-        if [ -f "$f" ]; then
-          if check_config "$f"; then
-            printf %s\\n "$(basename "$f")" | sed -E -e 's/.env$//'
-            wrap "$(sed -E '/DEW_/q' "$f" | grep -E '^#' | sed -E 's/^#[[:space:]]*//g' | tr '
-' ' ')" "  "
-            printf \\n
+  if [ "$#" = "0" ]; then
+    for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
+      if [ -d "$d" ]; then
+        for f in ${d}/*; do
+          if [ -f "$f" ]; then
+            if check_config "$f"; then
+              summary "$f"
+            fi
           fi
-        fi
-      done
-    fi
-  done
+        done
+      fi
+    done
+  else
+    for i in "$@"; do
+      f=$(config "$i")
+      if [ -n "$f" ]; then
+        summary "$f"
+      else
+        log_error "$i is not a known configuration"
+      fi
+    done
+  fi
   exit
 fi
 
