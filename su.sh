@@ -67,9 +67,9 @@ group_member() {
         # Go old style, just modify the /etc/group file
         gid=$(grep -E "^${2}:" /etc/group|cut -d: -f3)
         if grep -q "^${2}:" /etc/group | grep -E ':$'; then
-          sed -i "s/${2}:x:${gid}:/${2}:x:${gid}:${1}/"
+          sed -i -e "s/${2}:x:${gid}:/${2}:x:${gid}:${1}/" /etc/group
         else
-          sed -iE "s/${2}:x:${gid}:(.*)/${2}:x:${gid}:\1,${1}/"
+          sed -iE -e "s/${2}:x:${gid}:(.*)/${2}:x:${gid}:\1,${1}/" /etc/group
         fi
         ;;
     esac
