@@ -52,7 +52,7 @@ git submodule update --init --recursive
 To catch up with changes, run the following:
 
 ```shell
-git submodule update --recursive --remote
+git submodule update --init --recursive
 ```
 
   [submodules]: https://git-scm.com/book/en/v2/Git-Tools-Submodules
