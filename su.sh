@@ -195,14 +195,17 @@ else
   fi
 
   # Arrange for the user to be part of the Docker group by creating the group
-  # and letting the user to be a member of the group.
+  # and letting the user to be a member of the group. We are able to cope with
+  # the fact that there might already be a group with the same id within the
+  # container, in which case, we just reuse its name so we can map onto the
+  # host's group.
   if [ -f "/etc/group" ] && \
       ! cut -d: -f1 /etc/group | grep -q "^${DOCKER_GROUP}:" && \
       [ -S "$DOCKER_SOCKET" ]; then
     dgid=$(stat -c '%g' "$DOCKER_SOCKET")
     log "Making user $USER member of the group $DOCKER_GROUP with id $dgid to /etc/passwd"
     create_group "$DOCKER_GROUP" "$dgid" || true
-    group_member "$USER" "$DOCKER_GROUP" || true
+    group_member "$USER" "$(group_name "$dgid")" || true
   fi
 
   # Now run an interactive shell with lesser privileges, i.e. as the user that
