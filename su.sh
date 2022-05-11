@@ -214,22 +214,31 @@ else
   # branch to the if-statement, but even busybox has an implementation of su!
   # This script would however fail in bare environments, i.e. raw images with a
   # single binary in them.
-  if command -v "su" >/dev/null 2>&1; then
+  if command -v "sudo" >/dev/null 2>&1; then
     if [ -z "${DEW_SHELL:-}" ]; then
-      log "Becoming $USER, running $SHELL $* as set in /etc/passwd"
-      exec su "$USER" "$@"
+      log "Becoming $USER, running $* with sudo"
+      exec sudo -u "$USER" -- "$@"
     else
-      log "Becoming $USER, running $DEW_SHELL $*"
-      exec su -s "$(command -v "$DEW_SHELL")" "$USER" "$@"
-    fi
-  elif command -v "sudo" >/dev/null 2>&1; then
-    if [ -z "${DEW_SHELL:-}" ]; then
-      log "Becoming $USER, running $SHELL $* as set in /etc/passwd"
-      exec sudo -u "$USER" -- "$SHELL" "$@"
-    else
-      log "Becoming $USER, running $DEW_SHELL $*"
+      log "Becoming $USER, running $DEW_SHELL $* (at: $(command -v "$DEW_SHELL")) with sudo"
       exec sudo -u "$USER" -- "$(command -v "$DEW_SHELL")" "$@"
     fi
+  elif command -v "su" >/dev/null 2>&1; then
+    # Create a temporary script that will call the remaining of the arguments,
+    # with the DEW_SHELL prefixed if relvant. This is because su is evil and -c
+    # option only takes a single command...
+    tmpf=$(mktemp)
+    printf '#!%s\n' "$SHELL" > "$tmpf"
+    printf "exec" >> "$tmpf"
+    if [ -n "${DEW_SHELL:-}" ]; then
+      printf ' "%s"' "$DEW_SHELL" >> "$tmpf"
+    fi
+    for a in "$@"; do
+      [ -n "$a" ] && printf ' "%s"' "$a" >> "$tmpf"
+    done
+    printf \\n >> "$tmpf"
+    chmod a+rx "$tmpf"
+    log "Becoming $USER, running ${DEW_SHELL:-} $* with su"
+    exec su -c "$tmpf" "$USER"
   else
     log "Can neither find su, nor sudo"
     exit 1

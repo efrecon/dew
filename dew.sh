@@ -50,7 +50,7 @@ XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/${USER}}
 # Location of the directories where we can store shortcut to environments that
 # are important to us. The default is the config directory under this
 # repository, and the dew directory under the XDG configuration directory.
-DEW_CONFIG_PATH=${DEW_CONFIG_PATH:-"${XDG_CONFIG_HOME}/dew:${DEW_ROOTDIR}/config"}
+DEW_CONFIG_PATH=${DEW_CONFIG_PATH:-"$(pwd)/.dew.d:${XDG_CONFIG_HOME}/dew:${DEW_ROOTDIR}/config"}
 
 # Location of the docker socket. When empty, it will not be passed further
 DEW_SOCK=${DEW_SOCK:-/var/run/docker.sock}
@@ -59,7 +59,7 @@ DEW_SOCK=${DEW_SOCK:-/var/run/docker.sock}
 # ignored in the destination container.
 DEW_BLACKLIST=${DEW_BLACKLIST:-SSH_AUTH_SOCK,TMPDIR,PATH,LC_TIME,LC_CTYPE,LANG}
 
-# Should we impersonate the user in the container, i.e. run with the same used
+# Should we impersonate the user in the container, i.e. run with the same user
 # id (and group).
 DEW_IMPERSONATE=${DEW_IMPERSONATE:-1}
 
@@ -108,6 +108,10 @@ DEW_REBASER=${DEW_REBASER:-"${DEW_ROOTDIR%/}/libexec/docker-rebase/rebase.sh"}
 # Comment to print out before running
 DEW_COMMENT=${DEW_COMMENT:-""}
 
+# List of path specifications (at host) to create before starting the container.
+# Use this, for example, to create directory to store tool-specific
+# configuration. Each specification colon-separated: name of path, type of path
+# (d for a directory, f for a file (the default))
 DEW_PATHS=${DEW_PATHS:-""}
 
 # Should we just list available configs
@@ -120,6 +124,11 @@ DEW_RUNTIMES=${DEW_RUNTIMES:-"docker podman nerdctl"}
 # Runtime to use, when empty, the default, runtimes from DEW_RUNTIMES will be
 # used (first match).
 DEW_RUNTIME=${DEW_RUNTIME:-""}
+
+# Inject following command into a raw container based on the same image, then
+# use that image for the remaining of the setup. This is almost the same as
+# creating a Dockerfile based on the same image, with the `RUN` command in it.
+DEW_INJECT=${DEW_INJECT:-""}
 
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
@@ -138,6 +147,7 @@ parseopts \
     rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
     xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
+    j,inject OPTION INJECT - "Inject this command (can be an executable script) into the original image, then run from the resulting image. This is a poorman's (Dockerfile) RUN." \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
@@ -245,12 +255,53 @@ wrap() {
   stack_unlet max l_indent wrap
 }
 
+# Resolve the value of % enclosed variables with their content in the incoming
+# stream. Do this only for "our" variables, i.e. the ones from this script.
+resolve() {
+  # Construct a set of -e sed expressions, picking each time a separator that
+  # does not appear in the replace value in order to keep sed happy. Build these
+  # onto the only array that we have, i.e. the one to carry incoming arguments.
+  while IFS= read -r line; do
+    # Get the name of the variable, i.e. everything in uppercase before the
+    # equal sign printed out by set.
+    var=$(printf %s\\n "$line" | sed -E -e 's/([A-Z_]+)=(.*)/\1/')
+    # remove the leading and ending quotes out of the value coming from set, we
+    # could run through eval here, but it'll be approx as many processes (so no
+    # optimisation possible)
+    val=$(printf %s\\n "$line" | sed -E -e 's/([A-Z_]+)=(.*)/\2/' | sed -E -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+    for sep in / '!' ';' '&' ',' '|' '^'; do
+      if ! printf %s\\n "$val" | grep -Fq "$sep"; then
+        break
+      fi
+      sep=
+    done
+    if [ -n "$sep" ]; then
+      set -- -e "s${sep}%${var}%${sep}${val}${sep}g" "$@"
+    else
+      log_error "Cannot find a proper sed separator!"
+    fi
+  done <<EOF
+$(set | grep -E '^DEW_')
+EOF
+  # Build the final sed command and execute it, it will perform all
+  # substitutions in one go and dump them onto the stdout.
+  set -- sed "$@"
+  exec "$@"
+}
+
+baseimage() {
+  if printf %s\\n "$1" | grep -qE ':dew_[a-f0-9]{32}$'; then
+    docker image inspect --format '{{ .Config.Comment }}'
+  else
+    printf %s\\n "$1"
+  fi
+}
 
 if [ "$DEW_LIST" = "1" ]; then
   if [ "$#" = "0" ]; then
     for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
       if [ -d "$d" ]; then
-        for f in ${d}/*; do
+        for f in "${d}"/*; do
           if [ -f "$f" ]; then
             if check_config "$f"; then
               summary "$f"
@@ -296,6 +347,7 @@ shift; # Jump to the arguments
 
 # Read configuration file for the first parameter
 DEW_CONFIG=$(config "$DEW_IMAGE")
+DEW_CONFIGDIR=
 if [ -n "$DEW_CONFIG" ]; then
   log_info "Reading configuration for $DEW_IMAGE from $DEW_CONFIG"
   # shellcheck disable=SC1090 # The whole point is to have it dynamic!
@@ -304,7 +356,15 @@ if [ -n "$DEW_CONFIG" ]; then
   for v in $_OPTS; do
     eval "$(printf %s\\n "$_ENV" | grep "^${v}=")"
   done
+  # shellcheck disable=SC2034 # We make this available for resolution (see below)
+  DEW_CONFIGDIR=$(dirname "$DEW_CONFIG")
 fi
+
+# Resolve %-enclosed strings (with variable names) in some of our variable
+# values. We want to avoid this as much as possible, but this is necessary to
+# write configuration files more easily.
+DEW_OPTS=$(printf %s\\n "$DEW_OPTS"|resolve)
+DEW_INJECT=$(printf %s\\n "$DEW_INJECT"|resolve)
 
 # Rebase (or not) image
 if [ -n "$DEW_REBASE" ]; then
@@ -315,6 +375,60 @@ if [ -n "$DEW_REBASE" ]; then
   else
     log_notice "Rebasing $DEW_IMAGE on top of $DEW_REBASE"
     DEW_IMAGE=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" -- "$DEW_IMAGE")
+  fi
+fi
+
+# Perform injection
+if [ -n "$DEW_INJECT" ]; then
+  # Extract the raw (untagged) name of the image
+  img=$(printf %s\\n "$DEW_IMAGE" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')
+
+  # Use or create a shell script to run the command
+  if [ -f "$DEW_INJECT" ]; then
+    tmpdir=
+  else
+    tmpdir=$(mktemp -d)
+    printf '#!/bin/sh\n' > "${tmpdir}/init.sh"
+    printf %s\\n "$DEW_INJECT" >> "${tmpdir}/init.sh"
+    chmod a+x "${tmpdir}/init.sh"
+    DEW_INJECT="${tmpdir}/init.sh"
+    log_debug "Created temporary injection script: $DEW_INJECT"
+  fi
+
+  # Compute the md5 sum of the script to inject, we will use the sum as part of
+  # the tag for the image.
+  md5=$(md5sum "$DEW_INJECT"|awk '{print $1}')
+
+  # When we already have an injected image, don't do anything. Otherwise, run a
+  # container based on the original image with the entrypoint being the script
+  # to run. Once done, save the image and make this the image that we are going
+  # to use for further operations.
+  if ! "${DEW_RUNTIME}" image inspect "${img}:dew_${md5}" >/dev/null 2>&1; then
+    DEW_INJECT=$(readlink_f "$DEW_INJECT")
+    # Create a container, with the injection script as an entrypoint. Let it run
+    # until it exits. Once done, use the stopped container to generate a new
+    # image, then remove the (temporary) container entirely.
+    log_debug "Injecting into $DEW_IMAGE"
+    "${DEW_RUNTIME}" run \
+      -v "$(dirname "$DEW_INJECT"):$(dirname "$DEW_INJECT"):ro" \
+      --entrypoint "$DEW_INJECT" \
+      --name "$DEW_NAME" \
+      -- \
+      "$DEW_IMAGE"
+    log_debug "Run $DEW_INJECT in $DEW_IMAGE, generated container $DEW_NAME"
+    "${DEW_RUNTIME}" commit \
+      --message "$DEW_IMAGE" \
+      -- \
+      "$DEW_NAME" "${img}:dew_${md5}"
+    log_info "Injected $DEW_INJECT into $DEW_IMAGE to generate ${img}:dew_${md5}"
+    "$DEW_RUNTIME" rm --volumes "$DEW_NAME"
+  fi
+
+  # Replace the image for further operations and then cleanup.
+  log_info "Using injected image ${img}:dew_${md5} instead of $DEW_IMAGE"
+  DEW_IMAGE=${img}:dew_${md5}
+  if [ -n "$tmpdir" ]; then
+    rm -rf "$tmpdir"
   fi
 fi
 
@@ -385,11 +499,33 @@ log_trace "Kickstarting a container based on $DEW_IMAGE"
 # Remember number of arguments we had after the name of the image.
 __DEW_NB_ARGS="$#"
 
+if [ "$DEW_IMPERSONATE" = "1" ] && { [ -z "$DEW_SHELL" ] || [ "$DEW_SHELL" = "-" ]; }; then
+  # Inject the command
+  if [ "$__DEW_NB_ARGS" = "0" ]; then
+    while IFS= read -r arg; do
+      [ -n "$arg" ] && set -- "$arg" "$@"
+    done <<EOF
+$(docker image inspect \
+      --format '{{ join .Config.Cmd "\n" }}' "$(baseimage "$DEW_IMAGE")" |
+  awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
+EOF
+  fi
+  # Inject the entrypoint
+  while IFS= read -r arg; do
+    [ -n "$arg" ] && set -- "$arg" "$@"
+  done <<EOF
+$(docker image inspect \
+      --format '{{ join .Config.Entrypoint "\n" }}' "$(baseimage "$DEW_IMAGE")" |
+  awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
+EOF
+fi
+
 # Add image at once
 set -- "$DEW_IMAGE" "$@"
 
 # Add blindly any options
 if [ -n "$DEW_OPTS" ]; then
+  # shellcheck disable=SC2086 # We want expansion here
   set -- $DEW_OPTS "$@"
 fi
 
@@ -457,123 +593,40 @@ if is_true "$DEW_INTERACTIVE" || { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ]
         "$@"
 fi
 
-if [ "$__DEW_NB_ARGS" -gt 0 ]; then
-  if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
-    # We have specified a "shell", we understand this as specifying a different
-    # entrypoint. If impersonation is on, then we behave more or less as when
-    # running interactively. Otherwise, just run the image with specified
-    # arguments, but with a different entrypoint.
-    if [ "$DEW_IMPERSONATE" = "1" ]; then
-      if [ "$MG_VERBOSITY" = "trace" ]; then
-        set -- -e "DEW_DEBUG=1" "$@"
-      fi
-      if [ "$DEW_RUNTIME" = "podman" ]; then
-        set -- \
-              -e "HOME=$HOME" \
-              -e "USER=$USER" \
-              --entrypoint "$DEW_SHELL" \
-              "$@"
-      else
-        set -- \
-              -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-              -e DEW_UID=$(id -u) \
-              -e DEW_GID=$(id -g) \
-              -e "DEW_SHELL=$DEW_SHELL" \
-              -e "HOME=$HOME" \
-              -e "USER=$USER" \
-              --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-              "$@"
-      fi
-    else
-      set -- --entrypoint "$DEW_SHELL" "$@"
-    fi
-  else
-    # When we have specified arguments at the command line, we expect to be
-    # calling a program in a non-interactive manner. Elevate to the user if
-    # necessary and run
-    if [ "$DEW_IMPERSONATE" = "1" ]; then
-      set -- --user "$(id -u):$(id -g)" "$@"
-    fi
-  fi
-elif [ -n "$DEW_SHELL" ]; then
-  # If we have no other argument than a Docker image (or a configured argument),
-  # we behave a little differently when a specific shell is provided. When the
-  # shell is '-', then this is understood as "do as little modification as
-  # possible", so we just elevate to the user and run the image, with all
-  # default arguments (as in the combination of the entrypoint and the default
-  # set of arguments from the command).
-  if [ "$DEW_SHELL" = "-" ]; then
-    if [ "$DEW_IMPERSONATE" = "1" ]; then
-      set -- --user "$(id -u):$(id -g)" "$@"
-    fi
-  else
-    # If the shell was specified, we understand this as trying to override the
-    # entrypoint. We become the same user as the one running dew, after having
-    # setup a minimial environment. This will run the specified shell with the
-    # proper privieges.
+if [ "$DEW_RUNTIME" = "podman" ]; then
+  true
+else
+  if [ "$DEW_IMPERSONATE" = "1" ]; then
     if [ "$MG_VERBOSITY" = "trace" ]; then
       set -- -e "DEW_DEBUG=1" "$@"
     fi
-    if [ "$DEW_IMPERSONATE" = "1" ]; then
-      if [ "$DEW_RUNTIME" = "podman" ]; then
-        set -- \
-              -e "HOME=$HOME" \
-              -e "USER=$USER" \
-              --entrypoint "$DEW_SHELL" \
-              "$@"
-      else
-        set -- \
-              -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-              -e DEW_UID=$(id -u) \
-              -e DEW_GID=$(id -g) \
-              -e "DEW_SHELL=$DEW_SHELL" \
-              -e "HOME=$HOME" \
-              -e "USER=$USER" \
-              --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-              "$@"
-      fi
-    else
-      if [ "$DEW_RUNTIME" = "podman" ]; then
-        set --  --entrypoint "$DEW_SHELL" \
-                "$@"
-      else
-        set -- \
-              -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-              -e "DEW_SHELL=$DEW_SHELL" \
-              --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-              "$@"
-      fi
-    fi
-  fi
-else
-  # If nothing at all was specified, we will run a shell under the proper
-  # privileges, i.e. inside an encapsulated environment, minimally mimicing the
-  # current user.
-  if [ "$MG_VERBOSITY" = "trace" ]; then
-    set -- -e "DEW_DEBUG=1" "$@"
-  fi
-  if [ "$DEW_IMPERSONATE" = "1" ]; then
-    if [ "$DEW_RUNTIME" = "podman" ]; then
+    if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
       set -- \
+            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            -e DEW_UID="$(id -u)" \
+            -e DEW_GID="$(id -g)" \
+            -e "DEW_SHELL=$DEW_SHELL" \
             -e "HOME=$HOME" \
             -e "USER=$USER" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
             "$@"
     else
+      # Now inject sh.sh as the entrypoint, it will pick the entrypoint and the
+      # command that we have just added.
       set -- \
             -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-            -e DEW_UID=$(id -u) \
-            -e DEW_GID=$(id -g) \
+            -e DEW_UID="$(id -u)" \
+            -e DEW_GID="$(id -g)" \
             -e "HOME=$HOME" \
             -e "USER=$USER" \
             --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-              "$@"
+            "$@"
     fi
   else
-    if [ "$DEW_RUNTIME" != "podman" ]; then
+    if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
       set -- \
-            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
-            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
-              "$@"
+        --entrypoint "$DEW_SHELL" \
+        "@"
     fi
   fi
 fi
@@ -585,7 +638,8 @@ set --  --rm \
         --init \
         --network host \
         -v /etc/localtime:/etc/localtime:ro \
-        --name "$DEW_NAME" "$@"
+        --name "$DEW_NAME" \
+        "$@"
 if [ "$DEW_RUNTIME" = "podman" ]; then
   set -- "$DEW_RUNTIME" run --userns=keep-id "$@"
 else
