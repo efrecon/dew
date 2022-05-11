@@ -499,6 +499,16 @@ log_trace "Kickstarting a container based on $DEW_IMAGE"
 # Remember number of arguments we had after the name of the image.
 __DEW_NB_ARGS="$#"
 
+# Pull early so we have something to inspect and reason about as soon as
+# necessary.
+if ! docker image inspect "$DEW_IMAGE" >/dev/null 2>&1; then
+  log_debug "Pulling image $DEW_IMAGE"
+  docker image pull "$DEW_IMAGE"
+fi
+
+# Insert the image's entrypoint (and when relevant command) in front of the
+# arguments when we are going to impersonate (which will replace the
+# entrypoint).
 if [ "$DEW_IMPERSONATE" = "1" ] && { [ -z "$DEW_SHELL" ] || [ "$DEW_SHELL" = "-" ]; }; then
   # Inject the command
   if [ "$__DEW_NB_ARGS" = "0" ]; then
