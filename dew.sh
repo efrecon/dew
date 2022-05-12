@@ -130,6 +130,13 @@ DEW_RUNTIME=${DEW_RUNTIME:-""}
 # creating a Dockerfile based on the same image, with the `RUN` command in it.
 DEW_INJECT=${DEW_INJECT:-""}
 
+# Prefix to add to MD5 sum when generating tags for injected images. There are
+# few reasons to change this...
+DEW_INJECT_TAG_PREFIX=${DEW_INJECT_TAG_PREFIX:-"dew_"}
+
+# Should we cleanup old injected images?
+DEW_INJECT_CLEANUP=${DEW_INJECT_CLEANUP:-"1"}
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -290,8 +297,8 @@ EOF
 }
 
 baseimage() {
-  if printf %s\\n "$1" | grep -qE ':dew_[a-f0-9]{32}$'; then
-    docker image inspect --format '{{ .Config.Comment }}'
+  if printf %s\\n "$1" | grep -qE ":${DEW_INJECT_TAG_PREFIX}[a-f0-9]{32}\$"; then
+    docker image inspect --format '{{ .Comment }}' "$1"
   else
     printf %s\\n "$1"
   fi
@@ -403,7 +410,26 @@ if [ -n "$DEW_INJECT" ]; then
   # container based on the original image with the entrypoint being the script
   # to run. Once done, save the image and make this the image that we are going
   # to use for further operations.
-  if ! "${DEW_RUNTIME}" image inspect "${img}:dew_${md5}" >/dev/null 2>&1; then
+  if ! "${DEW_RUNTIME}" image inspect \
+          "${img}:${DEW_INJECT_TAG_PREFIX}${md5}" >/dev/null 2>&1; then
+    # Remove prior images to keep diskspace low. Iterate across all images with
+    # the same name, if any. For all that have a tag that starts with the
+    # injection prefix and have the name of the image in comment, remove them.
+    if [ "$DEW_INJECT_CLEANUP" = "1" ]; then
+      log_debug "Removing dangling injected siblings..."
+      docker image ls --format '{{ .Tag }}' "$img" | while IFS= read -r tag; do
+        if printf %s\\n "$tag" | grep -qE "^$DEW_INJECT_TAG_PREFIX"; then
+          if [ "$(baseimage "${img}:${tag}")" = "$DEW_IMAGE" ]; then
+            if docker image rm -f "${img}:${tag}" >/dev/null; then
+              log_info "Removed dangling injected image ${img}:${tag}"
+            else
+              log_warn "Could not remove dangling injected image ${img}:${tag}, still having a container running?"
+            fi
+          fi
+        fi
+      done
+    fi
+
     DEW_INJECT=$(readlink_f "$DEW_INJECT")
     # Create a container, with the injection script as an entrypoint. Let it run
     # until it exits. Once done, use the stopped container to generate a new
@@ -419,14 +445,14 @@ if [ -n "$DEW_INJECT" ]; then
     "${DEW_RUNTIME}" commit \
       --message "$DEW_IMAGE" \
       -- \
-      "$DEW_NAME" "${img}:dew_${md5}"
-    log_debug "Generated local image ${img}:dew_${md5} for future runs"
-    "$DEW_RUNTIME" rm --volumes "$DEW_NAME"
+      "$DEW_NAME" "${img}:${DEW_INJECT_TAG_PREFIX}${md5}" >/dev/null
+    log_debug "Generated local image ${img}:${DEW_INJECT_TAG_PREFIX}${md5} for future runs"
+    "$DEW_RUNTIME" rm --volumes "$DEW_NAME" >/dev/null
   fi
 
   # Replace the image for further operations and then cleanup.
-  log_info "Using injected image ${img}:dew_${md5} instead of $DEW_IMAGE"
-  DEW_IMAGE=${img}:dew_${md5}
+  log_info "Using injected image ${img}:${DEW_INJECT_TAG_PREFIX}${md5} instead of $DEW_IMAGE"
+  DEW_IMAGE=${img}:${DEW_INJECT_TAG_PREFIX}${md5}
   if [ -n "$tmpdir" ]; then
     rm -rf "$tmpdir"
   fi
