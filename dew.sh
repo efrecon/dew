@@ -408,7 +408,7 @@ if [ -n "$DEW_INJECT" ]; then
     # Create a container, with the injection script as an entrypoint. Let it run
     # until it exits. Once done, use the stopped container to generate a new
     # image, then remove the (temporary) container entirely.
-    log_debug "Injecting into $DEW_IMAGE"
+    log_info "Injecting $DEW_INJECT into $DEW_IMAGE, generating local image for future runs"
     "${DEW_RUNTIME}" run \
       -v "$(dirname "$DEW_INJECT"):$(dirname "$DEW_INJECT"):ro" \
       --entrypoint "$DEW_INJECT" \
@@ -420,7 +420,7 @@ if [ -n "$DEW_INJECT" ]; then
       --message "$DEW_IMAGE" \
       -- \
       "$DEW_NAME" "${img}:dew_${md5}"
-    log_info "Injected $DEW_INJECT into $DEW_IMAGE to generate ${img}:dew_${md5}"
+    log_debug "Generated local image ${img}:dew_${md5} for future runs"
     "$DEW_RUNTIME" rm --volumes "$DEW_NAME"
   fi
 
