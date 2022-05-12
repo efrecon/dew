@@ -494,7 +494,7 @@ if [ -n "$DEW_PATHS" ]; then
   done
 fi
 
-log_trace "Kickstarting a container based on $DEW_IMAGE"
+log_info "Kickstarting a transient host container based on $DEW_IMAGE"
 
 # Remember number of arguments we had after the name of the image.
 __DEW_NB_ARGS="$#"
@@ -533,7 +533,8 @@ fi
 # Add image at once
 set -- "$DEW_IMAGE" "$@"
 
-# Add blindly any options
+# Add blindly any options, these will appear last to be able to override
+# anything that dew would have added.
 if [ -n "$DEW_OPTS" ]; then
   # shellcheck disable=SC2086 # We want expansion here
   set -- $DEW_OPTS "$@"
@@ -636,7 +637,7 @@ else
     if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
       set -- \
         --entrypoint "$DEW_SHELL" \
-        "@"
+        "$@"
     fi
   fi
 fi
