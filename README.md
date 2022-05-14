@@ -33,10 +33,11 @@ docker run \
 This script takes some inspiration from [lope] with the addition of being able
 to read configurations for known environments. This minimises typing and
 automates all the necessary command-line options for making a given environment
-possible. Configurations are simply `env` files placed in a sub-directory of the
+possible. Configurations are simply `env` files placed: in a sub-directory of
+the current directory called `.dew.d`, in a sub-directory of the
 `$XDG_CONFIG_HOME` directory, or under the [`config`](./config/) directory of
-this repository. To get a list of known configurations, run `dew` with the
-`-l` option.
+this repository. To get a list of known configurations, run `dew` with the `-l`
+option.
 
   [lope]: https://github.com/Crazybus/lope
 
@@ -62,6 +63,8 @@ git submodule update --init --recursive
 All these examples suppose that you have made `dew.sh` available from your
 `$PATH`. They will also work if you symlink `dew` to a place where you have this
 repository installed, and arrange for the `dew` symlink to be in your `$PATH`.
+To make it quicker to type, you probably want to call the symbolic link `dew`
+instead of `dew.sh`.
 
 ### Busybox
 
@@ -309,8 +312,9 @@ This variable is a comma-separated list of environment variables that will
 This variable is a boolean. When set to 1, the default, impersonation will
 happen, i.e. the process or interactive prompt inside the container will run
 under a user with the same user and group identifiers as the ones of the calling
-user. In addition, in interactive containers, the user insider the container
-will be given the same `HOME` directory as the original user, albeit empty.
+user. In addition, in interactive containers, the user inside the container will
+be given the same `HOME` directory as the original user, albeit empty (except
+perhaps for the current path, see [`DEW_MOUNT`](#dewmount)).
 
 ### `DEW_INTERACTIVE`
 
@@ -343,10 +347,14 @@ The content of this variable is blindly passed to the `docker run` command when
 the container is created. It can be used to pass further files or directories to
 the container, e.g. the k8s configuration file, or an rc file.
 
+Note that in the content of this variable, any string named after one of the
+documented [variables](#variables-accessible-to-resolution), but surrounded by
+`%`, e.g. `%DEW_SHELL%`, will be replaced by the value of that variable.
+
 ### `DEW_SHELL`
 
 This variable can contain the path to a shell that will be run for interactive
-commands. The default is to have an empty value, which will looked for the
+commands. The default is to have an empty value, which will look for the
 following possible shells in the container, in that order: `bash`, `ash`, `sh`.
 
 ### `DEW_DOCKER_VERSION`
@@ -413,6 +421,30 @@ containers using the docker CLI command-line options. By default, this is an
 empty string, in which case the first existing client out of the list contained
 in the `DEW_RUNTIMES` (note the terminating `S`) will be picked. `docker` is
 first in this list for backwards compatibility.
+
+### `DEW_INJECT`
+
+This variable implements a single `RUN` command from a Dockerfile on the cheap.
+The command that it contains will be first used as the entrypoint on the image
+pointed at by the `DEW_IMAGE` variable (or corresponding command-line option).
+Once done, a snapshot of the resulting container will be stored in a local
+image, using a tag that uniquely depends on the content of the command. Then,
+everything will proceed as described in this manual, but using the new image.
+Image generation will only happen if the content of the command changes. When
+the command is a valid (local) path, its content will be used instead.
+
+Note that in the content of this variable, any string named after one of the
+documented [variables](#variables-accessible-to-resolution), but surrounded by
+`%`, e.g. `%DEW_SHELL%`, will be replaced by the value of that variable.
+
+## Variables Accessible to Resolution
+
+The variables accessible are all the variables starting with `DEW_` and
+described in the section [above][#environment-variables]. In addition, it is
+possible to use, when relevant:
+
++ `DEW_CONFIGDIR`: The directory hosting the `.env` configuration file.
++ `DEW_ROOTDIR`: The directory hosting the main `dew.sh` script (resolved).
 
 ## Implementation
 
