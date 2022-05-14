@@ -631,7 +631,29 @@ if is_true "$DEW_INTERACTIVE" || { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ]
 fi
 
 if [ "$DEW_RUNTIME" = "podman" ]; then
-  true
+  if [ "$DEW_IMPERSONATE" = "1" ]; then
+    if [ "$MG_VERBOSITY" = "trace" ]; then
+      set -- -e "DEW_DEBUG=1" "$@"
+    fi
+    if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
+      set -- \
+            -e "HOME=$HOME" \
+            -e "USER=$USER" \
+            --entrypoint "$DEW_SHELL" \
+            "$@"
+    else  
+      set -- \
+            -e "HOME=$HOME" \
+            -e "USER=$USER" \
+            "$@"
+    fi
+  else
+    if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
+      set -- \
+        --entrypoint "$DEW_SHELL" \
+        "$@"
+    fi
+  fi
 else
   if [ "$DEW_IMPERSONATE" = "1" ]; then
     if [ "$MG_VERBOSITY" = "trace" ]; then
