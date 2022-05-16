@@ -28,11 +28,17 @@ log() {
   fi
 }
 
-# Return the name of the Linux distribution this is running on, in lowercase.
+# Return the name of the Linux distribution group this is running on, in
+# lowercase.
 distro() {
   if [ -r "/etc/os-release" ]; then
-    # shellcheck disable=SC1091 # /etc/os-release is standardised
-    lsb_dist=$(. /etc/os-release && printf %s\\n "$ID")
+    if grep -Eq '^ID_LIKE=' /etc/os-release; then
+      # shellcheck disable=SC1091 # /etc/os-release is standardised
+      lsb_dist=$(. /etc/os-release && printf %s\\n "$ID_LIKE" | awk '{print $1};')
+    else
+      # shellcheck disable=SC1091 # /etc/os-release is standardised
+      lsb_dist=$(. /etc/os-release && printf %s\\n "$ID")
+    fi
     printf %s\\n "$lsb_dist" | tr '[:upper:]' '[:lower:]'
   fi
 }
@@ -41,11 +47,11 @@ distro() {
 create_group() {
   log "Adding group $1 with gid $2"
   case "$(distro)" in
-    ubuntu* | debian*)
+    debian*)
       addgroup -q --gid "$2" "$1";;
     alpine*)
       addgroup -g "$2" "$1";;
-    fedora)
+    rhel | centos | fedora)
       groupadd -g "$2" "$1";;
     *)
       # Go old style, just add an entry to the /etc/group file
@@ -57,11 +63,11 @@ create_group() {
 group_member() {
   if grep -qE "^${2}:" /etc/group; then
     case "$(distro)" in
-      ubuntu* | debian*)
-        adduser "$1" "$2";;
+      debian*)
+        adduser -q "$1" "$2";;
       alpine*)
         addgroup "$1" "$2";;
-      fedora)
+      rhel | centos | fedora)
         groupmod -a -U "$1" "$2";;
       *)
         # Go old style, just modify the /etc/group file
