@@ -28,6 +28,15 @@ log() {
   fi
 }
 
+silent() {
+  if [ "$DEW_DEBUG" = "0" ]; then
+    "$@" > /dev/null
+  else
+    "$@"
+  fi
+
+}
+
 # Return the name of the Linux distribution group this is running on, in
 # lowercase.
 distro() {
@@ -45,18 +54,21 @@ distro() {
 
 # Create a user group called $USER with the identifier $DEW_GID
 create_group() {
-  log "Adding group $1 with gid $2"
-  case "$(distro)" in
-    debian*)
-      addgroup -q --gid "$2" "$1";;
-    alpine*)
-      addgroup -g "$2" "$1";;
-    rhel | centos | fedora)
-      groupadd -g "$2" "$1";;
-    *)
-      # Go old style, just add an entry to the /etc/group file
-      printf "%s:x:%d:\n" "$1" "$2" >> /etc/group;;
-  esac
+  if [ -z "$(group_name "$2")" ]; then
+    log "Adding group $1 with gid $2"
+    case "$(distro)" in
+      debian*)
+        silent addgroup -q --gid "$2" "$1";;
+      alpine*)
+        silent addgroup -g "$2" "$1";;
+      rhel | centos | fedora)
+        silent groupadd -g "$2" "$1";;
+      *)
+        # Go old style, just add an entry to the /etc/group file
+        printf "%s:x:%d:\n" "$1" "$2" >> /etc/group;;
+    esac
+  fi
+  group_name "$2"
 }
 
 # Make user $1 member of group $2
@@ -64,11 +76,11 @@ group_member() {
   if grep -qE "^${2}:" /etc/group; then
     case "$(distro)" in
       debian*)
-        adduser -q "$1" "$2";;
+        silent adduser -q "$1" "$2";;
       alpine*)
-        addgroup "$1" "$2";;
+        silent addgroup "$1" "$2";;
       rhel | centos | fedora)
-        groupmod -a -U "$1" "$2";;
+        silent groupmems -a "$1" -g "$2";;
       *)
         # Go old style, just modify the /etc/group file
         gid=$(grep -E "^${2}:" /etc/group|cut -d: -f3)
@@ -84,61 +96,74 @@ group_member() {
   fi
 }
 
-group_name() {
+# Look in DB at path $1, for the identifier of value $2 at column $3, and return
+# the name at column $4
+db_match() {
   while IFS= read -r line; do
-    if [ "$(printf %s\\n "$line" | cut -d: -f3)" = "$1" ]; then
-      printf %s\\n "$line" | cut -d: -f1
+    if [ "$(printf %s\\n "$line" | cut -d: -f"${3:-"3"}")" = "$2" ]; then
+      printf %s\\n "$line" | cut -d: -f${4:-"1"}
       return
     fi
-  done < /etc/group
+  done < "$1"
+}
+
+group_name() {
+  db_match /etc/group "$1"
+}
+
+user_name() {
+  db_match /etc/passwd "$1"
 }
 
 # Create a user $USER, belonging to the group of the same name (created by
 # function above), with identifier $DEW_UID and shell $SHELL, as detected at the
 # when this script starts
 create_user() {
-  log "Adding user $USER with id $DEW_UID to /etc/passwd. Shell: $SHELL"
-  case "$(distro)" in
-    ubuntu* | debian*)
-      adduser \
-        -q \
-        --home "$HOME" \
-        --shell "$SHELL" \
-        --gid "$DEW_GID" \
-        --disabled-password \
-        --uid "$DEW_UID" \
-        --gecos "" \
-        "$USER";;
-    alpine*)
-      # Alpine uses the name of the group, which is the same as the user in our
-      # case.
-      adduser \
-        -h "$HOME" \
-        -s "$SHELL" \
-        -G "$(group_name "$DEW_GID")" \
-        -D \
-        -u "$DEW_UID" \
-        -g "" \
-        "$USER";;
-    fedora)
-      useradd \
-        --home-dir "$HOME" \
-        --shell "$SHELL" \
-        --gid "$DEW_GID" \
-        --password "" \
-        --uid "$DEW_UID" \
-        --comment "" \
-        "$USER";;
-    *)
-      # Go old style, just add an entry to the /etc/passwd file
-      printf "%s:x:%d:%d::%s:%s\\n" \
-            "$USER" \
-            "$DEW_UID" \
-            "$DEW_GID" \
-            "$HOME" \
-            "$SHELL" >> /etc/passwd;;
-  esac
-
+  if [ -z "$(user_name "$DEW_UID")" ]; then
+    log "Adding user $USER with id $DEW_UID to /etc/passwd. Shell: $SHELL"
+    case "$(distro)" in
+      debian*)
+        silent adduser \
+          -q \
+          --home "$HOME" \
+          --shell "$SHELL" \
+          --gid "$DEW_GID" \
+          --disabled-password \
+          --uid "$DEW_UID" \
+          --gecos "" \
+          "$USER";;
+      alpine*)
+        # Alpine uses the name of the group, which is the same as the user in our
+        # case.
+        silent adduser \
+          -h "$HOME" \
+          -s "$SHELL" \
+          -G "$(group_name "$DEW_GID")" \
+          -D \
+          -u "$DEW_UID" \
+          -g "" \
+          "$USER";;
+      rhel | centos | fedora)
+        silent useradd \
+          --home-dir "$HOME" \
+          --shell "$SHELL" \
+          --gid "$DEW_GID" \
+          --password "" \
+          --uid "$DEW_UID" \
+          --no-create-home \
+          --comment "" \
+          "$USER";;
+      *)
+        # Go old style, just add an entry to the /etc/passwd file
+        printf "%s:x:%d:%d::%s:%s\\n" \
+              "$USER" \
+              "$DEW_UID" \
+              "$DEW_GID" \
+              "$HOME" \
+              "$SHELL" >> /etc/passwd;;
+    esac
+  fi
+  user_name "$DEW_UID"
 }
 
 
@@ -183,23 +208,15 @@ else
   # If a group identifier was specified, arrange for the group to exist. The
   # group will be named after the user. Once done, create a user inside that
   # group.
-  if [ -n "${DEW_GID:-}" ]; then
-    # Create the group if there isn't one at the same GID
-    if [ -f "/etc/group" ] && ! cut -d: -f3 /etc/group | grep -qE "^${DEW_GID}\$"; then
-      create_group "$USER" "$DEW_GID"
-    fi
+  if [ -f "/etc/group" ] && [ -n "${DEW_GID:-}" ]; then
+    silent create_group "$USER" "$DEW_GID"
 
     # Create the user if it does not already exist. Arrange for the default
     # shell to be the one discovered at the beginning of this script. If a user
     # with that UID already exists, switch the username to the one already
     # registered for the UID, as nothing else would work.
     if [ -f "/etc/passwd" ] && [ -n "${DEW_UID:-}" ]; then
-      if cut -d: -f3 /etc/passwd | grep -q "^${DEW_UID}\$"; then
-        USER=$(grep -E "^[a-zA-Z0-9._-]+:[x*]:${DEW_UID}" /etc/passwd|cut -d: -f1)
-        log "Picked $USER, matching user id: $DEW_UID"
-      else
-        create_user
-      fi
+      USER=$(create_user)
     fi
   fi
 
@@ -213,8 +230,8 @@ else
       [ -S "$DOCKER_SOCKET" ]; then
     dgid=$(stat -c '%g' "$DOCKER_SOCKET")
     log "Making user $USER member of the group $DOCKER_GROUP with id $dgid to /etc/passwd"
-    create_group "$DOCKER_GROUP" "$dgid" || true
-    group_member "$USER" "$(group_name "$dgid")" || true
+    silent create_group "$DOCKER_GROUP" "$dgid" || true
+    silent group_member "$USER" "$(group_name "$dgid")" || true
   fi
 
   # Now run an interactive shell with lesser privileges, i.e. as the user that
@@ -233,7 +250,7 @@ else
     fi
   elif command -v "su" >/dev/null 2>&1; then
     # Create a temporary script that will call the remaining of the arguments,
-    # with the DEW_SHELL prefixed if relvant. This is because su is evil and -c
+    # with the DEW_SHELL prefixed if relevant. This is because su is evil and -c
     # option only takes a single command...
     tmpf=$(mktemp)
     printf '#!%s\n' "$SHELL" > "$tmpf"
