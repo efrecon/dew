@@ -171,8 +171,11 @@ else
 
   # Create a home for the user and make sure it is accessible for RW
   if [ -n "$HOME" ] && ! [ -d "$HOME" ]; then
-    log "Creating home directory $HOME, owned by ${DEW_UID:-0}:${DEW_GID:-0}"
+    log "Creating home directory $HOME"
     mkdir -p "$HOME"
+  fi
+  if [ -n "$HOME" ] && [ -d "$HOME" ]; then
+    log "Changing owner of $HOME to ${DEW_UID:-0}:${DEW_GID:-0}"
     chown "${DEW_UID:-0}:${DEW_GID:-0}" "${HOME}"
     chmod ug+rwx "$HOME"
   fi
