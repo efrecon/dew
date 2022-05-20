@@ -380,6 +380,7 @@ fi
 # write configuration files more easily.
 DEW_OPTS=$(printf %s\\n "$DEW_OPTS"|resolve)
 DEW_INJECT=$(printf %s\\n "$DEW_INJECT"|resolve)
+DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve)
 
 # Rebase (or not) image
 if [ -n "$DEW_REBASE" ]; then
