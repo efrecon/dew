@@ -137,6 +137,9 @@ DEW_INJECT_TAG_PREFIX=${DEW_INJECT_TAG_PREFIX:-"dew_"}
 # Should we cleanup old injected images?
 DEW_INJECT_CLEANUP=${DEW_INJECT_CLEANUP:-"1"}
 
+# Arguments to injection script
+DEW_INJECT_ARGS=${DEW_INJECT_ARGS:-""}
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -155,6 +158,7 @@ parseopts \
     xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     j,inject OPTION INJECT - "Inject this command (can be an executable script) into the original image, then run from the resulting image. This is a poorman's (Dockerfile) RUN." \
+    inject-args OPTION INJECT_ARGS - "Arguments to the injection comman" \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
@@ -304,6 +308,10 @@ baseimage() {
   fi
 }
 
+hash() {
+  sha256sum | grep -Eo '[0-9a-f]+' | cut -c -"${1:-"12"}"
+}
+
 if [ "$DEW_LIST" = "1" ]; then
   if [ "$#" = "0" ]; then
     for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
@@ -372,6 +380,7 @@ fi
 # write configuration files more easily.
 DEW_OPTS=$(printf %s\\n "$DEW_OPTS"|resolve)
 DEW_INJECT=$(printf %s\\n "$DEW_INJECT"|resolve)
+DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve)
 
 # Rebase (or not) image
 if [ -n "$DEW_REBASE" ]; then
@@ -402,19 +411,22 @@ if [ -n "$DEW_INJECT" ]; then
     log_debug "Created temporary injection script: $DEW_INJECT"
   fi
 
-  # Compute the md5 sum of the script to inject, we will use the sum as part of
-  # the tag for the image.
-  md5=$(md5sum "$DEW_INJECT"|awk '{print $1}')
+  # Compute a shortened hash for the script to inject and its arguments, we will
+  # use them as part of the tag for the image.
+  sum_cmd=$(hash < "$DEW_INJECT")
+  sum_args=$(printf %s\\n "$DEW_INJECT_ARGS" | hash)
+  injected_img=$(printf %s:%s%s_%s\\n "$img" "$DEW_INJECT_TAG_PREFIX" "$sum_cmd" "$sum_args")
 
   # When we already have an injected image, don't do anything. Otherwise, run a
   # container based on the original image with the entrypoint being the script
   # to run. Once done, save the image and make this the image that we are going
   # to use for further operations.
-  if ! "${DEW_RUNTIME}" image inspect \
-          "${img}:${DEW_INJECT_TAG_PREFIX}${md5}" >/dev/null 2>&1; then
+  if ! "${DEW_RUNTIME}" image inspect "$injected_img" >/dev/null 2>&1; then
     # Remove prior images to keep diskspace low. Iterate across all images with
     # the same name, if any. For all that have a tag that starts with the
     # injection prefix and have the name of the image in comment, remove them.
+    # Note that this might remove a bit too much, as it does not take the
+    # injection arguments into account.
     if [ "$DEW_INJECT_CLEANUP" = "1" ]; then
       log_debug "Removing dangling injected siblings..."
       docker image ls --format '{{ .Tag }}' "$img" | while IFS= read -r tag; do
@@ -434,25 +446,26 @@ if [ -n "$DEW_INJECT" ]; then
     # Create a container, with the injection script as an entrypoint. Let it run
     # until it exits. Once done, use the stopped container to generate a new
     # image, then remove the (temporary) container entirely.
-    log_info "Injecting $DEW_INJECT into $DEW_IMAGE, generating local image for future runs"
+    log_info "Injecting $DEW_INJECT $DEW_INJECT_ARGS into $DEW_IMAGE, generating local image for future runs"
     "${DEW_RUNTIME}" run \
       -v "$(dirname "$DEW_INJECT"):$(dirname "$DEW_INJECT"):ro" \
       --entrypoint "$DEW_INJECT" \
       --name "$DEW_NAME" \
       -- \
-      "$DEW_IMAGE"
-    log_debug "Run $DEW_INJECT in $DEW_IMAGE, generated container $DEW_NAME"
+      "$DEW_IMAGE" \
+      $DEW_INJECT_ARGS
+    log_debug "Run $DEW_INJECT $DEW_INJECT_ARGS in $DEW_IMAGE, generated container $DEW_NAME"
     "${DEW_RUNTIME}" commit \
       --message "$DEW_IMAGE" \
       -- \
-      "$DEW_NAME" "${img}:${DEW_INJECT_TAG_PREFIX}${md5}" >/dev/null
-    log_debug "Generated local image ${img}:${DEW_INJECT_TAG_PREFIX}${md5} for future runs"
+      "$DEW_NAME" "$injected_img" >/dev/null
+    log_debug "Generated local image $injected_img for future runs"
     "$DEW_RUNTIME" rm --volumes "$DEW_NAME" >/dev/null
   fi
 
   # Replace the image for further operations and then cleanup.
-  log_info "Using injected image ${img}:${DEW_INJECT_TAG_PREFIX}${md5} instead of $DEW_IMAGE"
-  DEW_IMAGE=${img}:${DEW_INJECT_TAG_PREFIX}${md5}
+  log_info "Using injected image $injected_img instead of $DEW_IMAGE"
+  DEW_IMAGE=$injected_img
   if [ -n "$tmpdir" ]; then
     rm -rf "$tmpdir"
   fi

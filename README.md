@@ -437,6 +437,18 @@ Note that in the content of this variable, any string named after one of the
 documented [variables](#variables-accessible-to-resolution), but surrounded by
 `%`, e.g. `%DEW_SHELL%`, will be replaced by the value of that variable.
 
+### `DEW_INJECT_ARGS`
+
+This variable contains arguments that are blindly passed to the
+[injected](#dewinject) command at the time of image creation. This facilitates
+the reuse of the same injected command, with varying arguments. You could, for
+example, reuse a command that performs generic package installation and give it
+varying packages for the implementation of a container.
+
+Note that in the content of this variable, any string named after one of the
+documented [variables](#variables-accessible-to-resolution), but surrounded by
+`%`, e.g. `%DEW_SHELL%`, will be replaced by the value of that variable.
+
 ## Variables Accessible to Resolution
 
 The variables accessible are all the variables starting with `DEW_` and
