@@ -308,6 +308,7 @@ baseimage() {
   fi
 }
 
+# shellcheck disable=SC2120
 hash() {
   sha256sum | grep -Eo '[0-9a-f]+' | cut -c -"${1:-"12"}"
 }
@@ -355,7 +356,8 @@ fi
 # Cut out the possible tag/sha256 at the end of the image name and extract the
 # main name to be used as part of the automatically generated container name.
 # ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
-bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')")
+bn=$(basename "$(printf %s\\n "$1" |
+                 sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')")
 [ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
 DEW_IMAGE=$1
 shift; # Jump to the arguments
@@ -371,7 +373,7 @@ if [ -n "$DEW_CONFIG" ]; then
   for v in $_OPTS; do
     eval "$(printf %s\\n "$_ENV" | grep "^${v}=")"
   done
-  # shellcheck disable=SC2034 # We make this available for resolution (see below)
+  # shellcheck disable=SC2034 # We will make this available for resolution
   DEW_CONFIGDIR=$(dirname "$DEW_CONFIG")
 fi
 
@@ -384,20 +386,30 @@ DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve)
 
 # Rebase (or not) image
 if [ -n "$DEW_REBASE" ]; then
-  rebased=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" --dry-run -- "$DEW_IMAGE")
+  rebased=$("$DEW_REBASER" \
+              --verbose notice \
+              --base "$DEW_REBASE" \
+              --dry-run \
+              -- \
+                "$DEW_IMAGE")
   if docker image inspect "$rebased" >/dev/null 2>&1; then
     log_debug "Rebasing to $rebased already performed, skipping"
     DEW_IMAGE=$rebased
   else
     log_notice "Rebasing $DEW_IMAGE on top of $DEW_REBASE"
-    DEW_IMAGE=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" -- "$DEW_IMAGE")
+    DEW_IMAGE=$("$DEW_REBASER" \
+                  --verbose notice \
+                  --base "$DEW_REBASE" \
+                  -- \
+                    "$DEW_IMAGE")
   fi
 fi
 
 # Perform injection
 if [ -n "$DEW_INJECT" ]; then
   # Extract the raw (untagged) name of the image
-  img=$(printf %s\\n "$DEW_IMAGE" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')
+  img=$(printf %s\\n "$DEW_IMAGE" | \
+        sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')
 
   # Use or create a shell script to run the command
   if [ -f "$DEW_INJECT" ]; then
@@ -415,7 +427,11 @@ if [ -n "$DEW_INJECT" ]; then
   # use them as part of the tag for the image.
   sum_cmd=$(hash < "$DEW_INJECT")
   sum_args=$(printf %s\\n "$DEW_INJECT_ARGS" | hash)
-  injected_img=$(printf %s:%s%s_%s\\n "$img" "$DEW_INJECT_TAG_PREFIX" "$sum_cmd" "$sum_args")
+  injected_img=$(printf %s:%s%s_%s\\n \
+                    "$img" \
+                    "$DEW_INJECT_TAG_PREFIX" \
+                    "$sum_cmd" \
+                    "$sum_args")
 
   # When we already have an injected image, don't do anything. Otherwise, run a
   # container based on the original image with the entrypoint being the script
@@ -447,6 +463,7 @@ if [ -n "$DEW_INJECT" ]; then
     # until it exits. Once done, use the stopped container to generate a new
     # image, then remove the (temporary) container entirely.
     log_info "Injecting $DEW_INJECT $DEW_INJECT_ARGS into $DEW_IMAGE, generating local image for future runs"
+    # shellcheck disable=SC2086 # We want expansion here
     "${DEW_RUNTIME}" run \
       -v "$(dirname "$DEW_INJECT"):$(dirname "$DEW_INJECT"):ro" \
       --entrypoint "$DEW_INJECT" \
@@ -481,9 +498,10 @@ if [ "$DEW_DOCKER" = "1" ]; then
     download \
       "https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz" \
       "${tmpdir}/docker.tgz"
-    wget -q -O "${tmpdir}/docker.tgz" https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz
     tar -C "$tmpdir" -xf "${tmpdir}/docker.tgz"
-    mv "${tmpdir}/docker/docker" "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION"
+    mv \
+      "${tmpdir}/docker/docker" \
+      "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION"
     rm -rf "$tmpdir"
   fi
 fi
@@ -548,14 +566,16 @@ fi
 # Insert the image's entrypoint (and when relevant command) in front of the
 # arguments when we are going to impersonate (which will replace the
 # entrypoint).
-if [ "$DEW_IMPERSONATE" = "1" ] && { [ -z "$DEW_SHELL" ] || [ "$DEW_SHELL" = "-" ]; }; then
+if [ "$DEW_IMPERSONATE" = "1" ] && \
+    { [ -z "$DEW_SHELL" ] || [ "$DEW_SHELL" = "-" ]; }; then
   # Inject the command
   if [ "$__DEW_NB_ARGS" = "0" ]; then
     while IFS= read -r arg; do
       [ -n "$arg" ] && set -- "$arg" "$@"
     done <<EOF
 $(docker image inspect \
-      --format '{{ join .Config.Cmd "\n" }}' "$(baseimage "$DEW_IMAGE")" |
+      --format '{{ join .Config.Cmd "\n" }}' \
+      "$(baseimage "$DEW_IMAGE")" |
   awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
 EOF
   fi
@@ -564,7 +584,8 @@ EOF
     [ -n "$arg" ] && set -- "$arg" "$@"
   done <<EOF
 $(docker image inspect \
-      --format '{{ join .Config.Entrypoint "\n" }}' "$(baseimage "$DEW_IMAGE")" |
+      --format '{{ join .Config.Entrypoint "\n" }}' \
+      "$(baseimage "$DEW_IMAGE")" |
   awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
 EOF
 fi
@@ -636,7 +657,9 @@ if [ "$DEW_DOCKER" = "1" ]; then
   fi
 fi
 
-if is_true "$DEW_INTERACTIVE" || { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ] && [ "$__DEW_NB_ARGS" = "0" ]; }; then
+if is_true "$DEW_INTERACTIVE" || \
+    { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ] && \
+      [ "$__DEW_NB_ARGS" = "0" ]; }; then
   set -- \
         -it \
         -a stdin -a stdout -a stderr \
