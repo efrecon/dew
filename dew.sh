@@ -545,6 +545,18 @@ if ! docker image inspect "$DEW_IMAGE" >/dev/null 2>&1; then
   docker image pull "$DEW_IMAGE"
 fi
 
+if [ "$DEW_IMPERSONATE" = "1" ]; then
+  __DEW_TARGET_USER=$(docker image inspect --format '{{ .Config.User }}' "$DEW_IMAGE")
+  if printf %s\\n "$__DEW_TARGET_USER" | grep -qF ':'; then
+    __DEW_TARGET_USER=$(printf %s\\n "$__DEW_TARGET_USER" | cut -d: -f1)
+  fi
+  if ! printf %s\\n "$__DEW_TARGET_USER" | grep -qE '[0-9]+'; then
+    if [ -z "$__DEW_TARGET_USER" ] || [ "$__DEW_TARGET_USER" = "root" ]; then
+      __DEW_TARGET_USER=0
+    fi
+  fi
+fi
+
 # Insert the image's entrypoint (and when relevant command) in front of the
 # arguments when we are going to impersonate (which will replace the
 # entrypoint).
@@ -654,7 +666,7 @@ if [ "$DEW_RUNTIME" = "podman" ]; then
             -e "USER=$USER" \
             --entrypoint "$DEW_SHELL" \
             "$@"
-    else  
+    else
       set -- \
             -e "HOME=$HOME" \
             -e "USER=$USER" \
@@ -669,6 +681,11 @@ if [ "$DEW_RUNTIME" = "podman" ]; then
   fi
 else
   if [ "$DEW_IMPERSONATE" = "1" ]; then
+    # We will become root to be able to run su.sh and then become "ourselves"
+    # inside the container.
+    if [ "$__DEW_TARGET_USER" != "0" ]; then
+      set -- -u "root" "$@"
+    fi
     if [ "$MG_VERBOSITY" = "trace" ]; then
       set -- -e "DEW_DEBUG=1" "$@"
     fi

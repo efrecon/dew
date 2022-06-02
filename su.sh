@@ -216,7 +216,14 @@ else
     # with that UID already exists, switch the username to the one already
     # registered for the UID, as nothing else would work.
     if [ -f "/etc/passwd" ] && [ -n "${DEW_UID:-}" ]; then
-      USER=$(create_user)
+      CUSER=$(create_user)
+      if [ "$CUSER" != "$USER" ]; then
+        CHOME=$(getent passwd "$CUSER" | cut -d: -f6)
+        log "Linking $CHOME to $HOME"
+        rm -rf "$CHOME"
+        ln -sf "$HOME" "$CHOME"
+        USER=$CUSER
+      fi
     fi
   fi
 
