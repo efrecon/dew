@@ -22,11 +22,7 @@ DOCKER_SOCKET=${DOCKER_SOCKET:-/var/run/docker.sock}
 DEW_DEBUG=${DEW_DEBUG:-0}
 
 # Log the text passed as a paramter whenever DEW_DEBUG is 1
-log() {
-  if [ "$DEW_DEBUG" = "1" ]; then
-    printf %s\\n "$1" >/dev/stderr
-  fi
-}
+log() { [ "$DEW_DEBUG" = "1" ] && printf %s\\n "$1" >&2 || true; }
 
 silent() {
   if [ "$DEW_DEBUG" = "0" ]; then
@@ -56,7 +52,7 @@ distro() {
 create_group() {
   if [ -z "$(group_name "$2")" ]; then
     log "Adding group $1 with gid $2"
-    case "$(distro)" in
+    case "$DEW_DISTRO" in
       debian*)
         silent addgroup -q --gid "$2" "$1";;
       alpine*)
@@ -74,7 +70,7 @@ create_group() {
 # Make user $1 member of group $2
 group_member() {
   if grep -qE "^${2}:" /etc/group; then
-    case "$(distro)" in
+    case "$DEW_DISTRO" in
       debian*)
         silent adduser -q "$1" "$2";;
       alpine*)
@@ -96,24 +92,8 @@ group_member() {
   fi
 }
 
-# Look in DB at path $1, for the identifier of value $2 at column $3, and return
-# the name at column $4
-db_match() {
-  while IFS= read -r line; do
-    if [ "$(printf %s\\n "$line" | cut -d: -f"${3:-"3"}")" = "$2" ]; then
-      printf %s\\n "$line" | cut -d: -f${4:-"1"}
-      return
-    fi
-  done < "$1"
-}
-
-group_name() {
-  db_match /etc/group "$1"
-}
-
-user_name() {
-  db_match /etc/passwd "$1"
-}
+group_name() { getent group "$1" | cut -d: -f1; }
+user_name() { getent passwd "$1" | cut -d: -f1; }
 
 # Create a user $USER, belonging to the group of the same name (created by
 # function above), with identifier $DEW_UID and shell $SHELL, as detected at the
@@ -121,7 +101,7 @@ user_name() {
 create_user() {
   if [ -z "$(user_name "$DEW_UID")" ]; then
     log "Adding user $USER with id $DEW_UID to /etc/passwd. Shell: $SHELL"
-    case "$(distro)" in
+    case "$DEW_DISTRO" in
       debian*)
         silent adduser \
           -q \
@@ -193,6 +173,9 @@ else
   # Otherwise (and ... in most cases), arrange for a minimal environment to
   # exist in the container before becoming the requested user and elevating down
   # to lesser privileges.
+
+  # Discover distro, will be used in functions
+  DEW_DISTRO=$(distro)
 
   # Create a home for the user and make sure it is accessible for RW
   if [ -n "$HOME" ] && ! [ -d "$HOME" ]; then
