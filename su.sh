@@ -92,8 +92,25 @@ group_member() {
   fi
 }
 
-group_name() { getent group "$1" | cut -d: -f1; }
-user_name() { getent passwd "$1" | cut -d: -f1; }
+db_get() {
+  if cmd_exists "getent"; then
+    getent "$1" "$2" | cut -d: -f1
+  else
+    if printf %s\\n "$2" | grep -qE '^[0-9]+$'; then
+      field=3
+    else
+      field=1
+    fi
+    while IFS= read -r line; do
+      if [ "$(printf %s\\n "$line" | cut -d: -f"$field")" = "$2" ]; then
+        printf %s\\n "$line"
+        return
+      fi
+    done < "/etc/$1"
+  fi
+}
+group_name() { db_get group "$1" | cut -d: -f1; }
+user_name() { db_get passwd "$1" | cut -d: -f1; }
 
 # Create a user $USER, belonging to the group of the same name (created by
 # function above), with identifier $DEW_UID and shell $SHELL, as detected at the
@@ -147,11 +164,13 @@ create_user() {
 }
 
 
+cmd_exists() { command -v "$1" >/dev/null 2>&1; }
+
 # Decide upon a good plausible shell to run, the order might be questionable,
 # but this covers a large set of distributions and shells.
 SHELL=
 for s in bash ash sh; do
-  if command -v "$s" >/dev/null 2>&1; then
+  if cmd_exists "$s"; then
     SHELL=$(command -v "$s")
     break
   fi
@@ -201,8 +220,8 @@ else
     if [ -f "/etc/passwd" ] && [ -n "${DEW_UID:-}" ]; then
       CUSER=$(create_user)
       if [ "$CUSER" != "$USER" ]; then
-        CHOME=$(getent passwd "$CUSER" | cut -d: -f6)
-        log "Linking $CHOME to $HOME"
+        CHOME=$(db_get passwd "$CUSER" | cut -d: -f6)
+        log "Image user $CUSER different from caller, linking $CHOME to $HOME"
         rm -rf "$CHOME"
         ln -sf "$HOME" "$CHOME"
         USER=$CUSER
