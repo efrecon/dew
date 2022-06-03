@@ -94,7 +94,7 @@ group_member() {
 
 db_get() {
   if cmd_exists "getent"; then
-    getent "$1" "$2" | cut -d: -f1
+    getent "$1" "$2"
   else
     if printf %s\\n "$2" | grep -qE '^[0-9]+$'; then
       field=3
