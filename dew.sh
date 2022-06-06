@@ -95,6 +95,9 @@ DEW_SHELL=${DEW_SHELL:-}
 # Version of the docker client to download
 DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-20.10.6}
 
+# Version of the fixuid binary to download
+DEW_FIXUID_VERSION=${DEW_FIXUID_VERSION:-}
+
 # Installation directory inside containers where we will inject stuff, whenever
 # relevant and necessary.
 DEW_INSTALLDIR=${DEW_INSTALLDIR:-/usr/local/bin}
@@ -115,7 +118,7 @@ DEW_COMMENT=${DEW_COMMENT:-""}
 DEW_PATHS=${DEW_PATHS:-""}
 
 # Should we just list available configs
-DEW_LIST=${DEW_LISt:-"0"}
+DEW_LIST=${DEW_LIST:-"0"}
 
 # List of runtimes to try when runtime is empty, in this order, first match will
 # be used.
@@ -139,6 +142,9 @@ DEW_INJECT_CLEANUP=${DEW_INJECT_CLEANUP:-"1"}
 
 # Arguments to injection script
 DEW_INJECT_ARGS=${DEW_INJECT_ARGS:-""}
+
+# Root GitHub home page
+DEW_GITHUB=${DEW_GITHUB:-"https://github.com/"}
 
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
@@ -297,7 +303,7 @@ EOF
 
 baseimage() {
   if printf %s\\n "$1" | grep -qE ":${DEW_INJECT_TAG_PREFIX}[a-f0-9]{32}\$"; then
-    docker image inspect --format '{{ .Comment }}' "$1"
+    "${DEW_RUNTIME}" image inspect --format '{{ .Comment }}' "$1"
   else
     printf %s\\n "$1"
   fi
@@ -306,6 +312,156 @@ baseimage() {
 # shellcheck disable=SC2120 # We are fine with the default in this script!
 hash() {
   sha256sum | grep -Eo '[0-9a-f]+' | cut -c -"${1:-"12"}"
+}
+
+version() {
+  log_debug "Guessing latest stable version for project $1"
+  # This works on the HTML from GitHub as follows:
+  # 1. Start from the list of tags, they point to the corresponding release.
+  # 2. Extract references to the release page, force a possible v and a number
+  #    at start of sub-path
+  # 3. Use slash and quote as separators and extract the tag/release number with
+  #    awk. This is a bit brittle.
+  # 4. Remove leading v, if there is one (there will be in most cases!)
+  # 5. Extract only pure SemVer sharp versions
+  # 6. Just keep the top one, i.e. the latest release.
+  download "${DEW_GITHUB}/${1}/tags" -|
+    grep -E "<a href=\"/${1}/releases/tag/v?[0-9]" |
+    awk -F'[/\"]' '{print $7}' |
+    sed 's/^v//g' |
+    grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' |
+    head -1
+}
+
+_tgz_installer() {
+  if ! [ -f "${XDG_CACHE_HOME}/dew/$1_$2" ]; then
+    log_notice "Downloading ${5:-"tarfile"} v$2"
+    tmpdir=$(mktemp -d)
+    download "$3" "${tmpdir}/$1.tgz"
+    tar -C "$tmpdir" -xf "${tmpdir}/$1.tgz"
+    mv "${tmpdir}/$4" "${XDG_CACHE_HOME}/dew/$1_$2"
+    rm -rf "$tmpdir"
+  fi
+}
+
+install_docker() {
+  xdg dew CACHE > /dev/null
+  if [ -z "$DEW_DOCKER_VERSION" ]; then
+    DEW_DOCKER_VERSION=$(version "moby/moby")
+  fi
+
+  _tgz_installer \
+    docker \
+    "$DEW_DOCKER_VERSION" \
+    "https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz" \
+    docker/docker \
+    "Docker client"
+}
+
+install_fixuid() {
+  xdg dew CACHE > /dev/null
+  if [ -z "$DEW_FIXUID_VERSION" ]; then
+    DEW_FIXUID_VERSION=$(version "boxboat/fixuid")
+  fi
+
+  _tgz_installer \
+    fixuid \
+    "$DEW_FIXUID_VERSION" \
+    "https://github.com/boxboat/fixuid/releases/download/v${DEW_FIXUID_VERSION}/fixuid-${DEW_FIXUID_VERSION}-linux-amd64.tar.gz" \
+    fixuid \
+    fixuid
+}
+
+image_user() {
+  img_user=$("${DEW_RUNTIME}" image inspect --format '{{ .Config.User }}' "$1")
+  if printf %s\\n "$img_user" | grep -qF ':'; then
+    printf %s\\n "$img_user"
+  elif [ -z "$img_user" ]; then
+    printf %d:%d\\n 0 0
+  else
+    printf %s:%s\\n "$img_user" "$("${DEW_RUNTIME}" run --rm --entrypoint id "$1" -g)"
+  fi
+}
+
+inject() {
+  # Extract the raw (untagged) name of the image
+  img=$(printf %s\\n "$DEW_IMAGE" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')
+
+  # Use or create a shell script to run the command
+  if [ -f "$1" ]; then
+    tmpdir=
+    injector=$1
+  else
+    tmpdir=$(mktemp -d)
+    printf '#!/bin/sh\n' > "${tmpdir}/init.sh"
+    printf %s\\n "$1" >> "${tmpdir}/init.sh"
+    chmod a+x "${tmpdir}/init.sh"
+    injector="${tmpdir}/init.sh"
+    log_debug "Created temporary injection script: $injector"
+  fi
+  injector_args=${2:-}
+  shift 2
+
+  # Compute a shortened hash for the script to inject and its arguments, we will
+  # use them as part of the tag for the image.
+  sum_cmd=$(hash < "$injector")
+  sum_args=$(printf %s\\n "$injector_args" | hash)
+  injected_img=$(printf %s:%s%s_%s\\n "$img" "$DEW_INJECT_TAG_PREFIX" "$sum_cmd" "$sum_args")
+
+  # When we already have an injected image, don't do anything. Otherwise, run a
+  # container based on the original image with the entrypoint being the script
+  # to run. Once done, save the image and make this the image that we are going
+  # to use for further operations.
+  if ! "${DEW_RUNTIME}" image inspect "$injected_img" >/dev/null 2>&1; then
+    # Remove prior images to keep diskspace low. Iterate across all images with
+    # the same name, if any. For all that have a tag that starts with the
+    # injection prefix and have the name of the image in comment, remove them.
+    # Note that this might remove a bit too much, as it does not take the
+    # injection arguments into account.
+    if [ "$DEW_INJECT_CLEANUP" = "1" ]; then
+      log_debug "Removing dangling injected siblings..."
+      "${DEW_RUNTIME}" image ls --format '{{ .Tag }}' "$img" | while IFS= read -r tag; do
+        if printf %s\\n "$tag" | grep -qE "^$DEW_INJECT_TAG_PREFIX"; then
+          if [ "$(baseimage "${img}:${tag}")" = "$DEW_IMAGE" ]; then
+            if "${DEW_RUNTIME}" image rm -f "${img}:${tag}" >/dev/null; then
+              log_info "Removed dangling injected image ${img}:${tag}"
+            else
+              log_warn "Could not remove dangling injected image ${img}:${tag}, still having a container running?"
+            fi
+          fi
+        fi
+      done
+    fi
+
+    DEW_INJECT=$(readlink_f "$injector")
+    # Create a container, with the injection script as an entrypoint. Let it run
+    # until it exits. Once done, use the stopped container to generate a new
+    # image, then remove the (temporary) container entirely.
+    log_info "Injecting $injector $injector_args into $DEW_IMAGE, generating local image for future runs"
+    "${DEW_RUNTIME}" run \
+      -u 0 \
+      -v "$(dirname "$injector"):$(dirname "$injector"):ro" \
+      --entrypoint "$injector" \
+      --name "$DEW_NAME" \
+      "$@" \
+      -- \
+      "$DEW_IMAGE" \
+      $injector_args
+    log_debug "Run $injector $injector_args in $DEW_IMAGE, generated container $DEW_NAME"
+    "${DEW_RUNTIME}" commit \
+      --message "$DEW_IMAGE" \
+      -- \
+      "$DEW_NAME" "$injected_img" >/dev/null
+    log_debug "Generated local image $injected_img for future runs"
+    "$DEW_RUNTIME" rm --volumes "$DEW_NAME" >/dev/null
+  fi
+
+  # Replace the image for further operations and then cleanup.
+  log_info "Using injected image $injected_img instead of $DEW_IMAGE"
+  DEW_IMAGE=$injected_img
+  if [ -n "$tmpdir" ]; then
+    rm -rf "$tmpdir"
+  fi
 }
 
 if [ "$DEW_LIST" = "1" ]; then
@@ -385,10 +541,11 @@ fi
 if printf %s\\n "$DEW_INJECT_ARGS" | grep -Fq '%DEW_'; then
   DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve)
 fi
+
 # Rebase (or not) image
 if [ -n "$DEW_REBASE" ]; then
   rebased=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" --dry-run -- "$DEW_IMAGE")
-  if docker image inspect "$rebased" >/dev/null 2>&1; then
+  if "$DEW_RUNTIME" image inspect "$rebased" >/dev/null 2>&1; then
     log_debug "Rebasing to $rebased already performed, skipping"
     DEW_IMAGE=$rebased
   else
@@ -399,97 +556,12 @@ fi
 
 # Perform injection
 if [ -n "$DEW_INJECT" ]; then
-  # Extract the raw (untagged) name of the image
-  img=$(printf %s\\n "$DEW_IMAGE" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')
-
-  # Use or create a shell script to run the command
-  if [ -f "$DEW_INJECT" ]; then
-    tmpdir=
-  else
-    tmpdir=$(mktemp -d)
-    printf '#!/bin/sh\n' > "${tmpdir}/init.sh"
-    printf %s\\n "$DEW_INJECT" >> "${tmpdir}/init.sh"
-    chmod a+x "${tmpdir}/init.sh"
-    DEW_INJECT="${tmpdir}/init.sh"
-    log_debug "Created temporary injection script: $DEW_INJECT"
-  fi
-
-  # Compute a shortened hash for the script to inject and its arguments, we will
-  # use them as part of the tag for the image.
-  sum_cmd=$(hash < "$DEW_INJECT")
-  sum_args=$(printf %s\\n "$DEW_INJECT_ARGS" | hash)
-  injected_img=$(printf %s:%s%s_%s\\n "$img" "$DEW_INJECT_TAG_PREFIX" "$sum_cmd" "$sum_args")
-
-  # When we already have an injected image, don't do anything. Otherwise, run a
-  # container based on the original image with the entrypoint being the script
-  # to run. Once done, save the image and make this the image that we are going
-  # to use for further operations.
-  if ! "${DEW_RUNTIME}" image inspect "$injected_img" >/dev/null 2>&1; then
-    # Remove prior images to keep diskspace low. Iterate across all images with
-    # the same name, if any. For all that have a tag that starts with the
-    # injection prefix and have the name of the image in comment, remove them.
-    # Note that this might remove a bit too much, as it does not take the
-    # injection arguments into account.
-    if [ "$DEW_INJECT_CLEANUP" = "1" ]; then
-      log_debug "Removing dangling injected siblings..."
-      docker image ls --format '{{ .Tag }}' "$img" | while IFS= read -r tag; do
-        if printf %s\\n "$tag" | grep -qE "^$DEW_INJECT_TAG_PREFIX"; then
-          if [ "$(baseimage "${img}:${tag}")" = "$DEW_IMAGE" ]; then
-            if docker image rm -f "${img}:${tag}" >/dev/null; then
-              log_info "Removed dangling injected image ${img}:${tag}"
-            else
-              log_warn "Could not remove dangling injected image ${img}:${tag}, still having a container running?"
-            fi
-          fi
-        fi
-      done
-    fi
-
-    DEW_INJECT=$(readlink_f "$DEW_INJECT")
-    # Create a container, with the injection script as an entrypoint. Let it run
-    # until it exits. Once done, use the stopped container to generate a new
-    # image, then remove the (temporary) container entirely.
-    log_info "Injecting $DEW_INJECT $DEW_INJECT_ARGS into $DEW_IMAGE, generating local image for future runs"
-    "${DEW_RUNTIME}" run \
-      -v "$(dirname "$DEW_INJECT"):$(dirname "$DEW_INJECT"):ro" \
-      --entrypoint "$DEW_INJECT" \
-      --name "$DEW_NAME" \
-      -- \
-      "$DEW_IMAGE" \
-      $DEW_INJECT_ARGS
-    log_debug "Run $DEW_INJECT $DEW_INJECT_ARGS in $DEW_IMAGE, generated container $DEW_NAME"
-    "${DEW_RUNTIME}" commit \
-      --message "$DEW_IMAGE" \
-      -- \
-      "$DEW_NAME" "$injected_img" >/dev/null
-    log_debug "Generated local image $injected_img for future runs"
-    "$DEW_RUNTIME" rm --volumes "$DEW_NAME" >/dev/null
-  fi
-
-  # Replace the image for further operations and then cleanup.
-  log_info "Using injected image $injected_img instead of $DEW_IMAGE"
-  DEW_IMAGE=$injected_img
-  if [ -n "$tmpdir" ]; then
-    rm -rf "$tmpdir"
-  fi
+  inject "$DEW_INJECT" "$DEW_INJECT_ARGS"
 fi
 
 # Download Docker client at the version specified by DEW_DOCKER_VERSION into the
 # XDG cache so that it can be injected into the container.
-if [ "$DEW_DOCKER" = "1" ]; then
-  xdg dew CACHE > /dev/null
-  if ! [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
-    log_notice "Downloading Docker client v$DEW_DOCKER_VERSION"
-    tmpdir=$(mktemp -d)
-    download \
-      "https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz" \
-      "${tmpdir}/docker.tgz"
-    wget -q -O "${tmpdir}/docker.tgz" https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz
-    tar -C "$tmpdir" -xf "${tmpdir}/docker.tgz"
-    mv "${tmpdir}/docker/docker" "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION"
-    rm -rf "$tmpdir"
-  fi
-fi
+if [ "$DEW_DOCKER" = "1" ]; then install_docker; fi
 
 # Create files/directories prior to starting up the container. This can be used
 # to generate (empty) RC files and similar. Format is any number of
@@ -543,18 +615,26 @@ __DEW_NB_ARGS="$#"
 
 # Pull early so we have something to inspect and reason about as soon as
 # necessary.
-if ! docker image inspect "$DEW_IMAGE" >/dev/null 2>&1; then
+if ! "$DEW_RUNTIME" image inspect "$DEW_IMAGE" >/dev/null 2>&1; then
   log_debug "Pulling image $DEW_IMAGE"
-  docker image pull "$DEW_IMAGE"
+  "$DEW_RUNTIME" image pull "$DEW_IMAGE"
+fi
+
+if [ "$DEW_IMPERSONATE" = "minimal" ]; then
+  install_fixuid;  # Will discover DEW_FIXUID_VERSION if none specified
+  IFS=: read -r __DEW_TARGET_USER __DEW_TARGET_GROUP <<EOF
+$(image_user "$DEW_IMAGE")
+EOF
+  inject \
+    "${DEW_ROOTDIR}/fixuid.sh" \
+    "-u $__DEW_TARGET_USER -g $__DEW_TARGET_GROUP -i /tmp/fixuid_${DEW_FIXUID_VERSION}" \
+    -v "${XDG_CACHE_HOME}/dew/fixuid_${DEW_FIXUID_VERSION}:/tmp/fixuid_${DEW_FIXUID_VERSION}:ro"
 fi
 
 # Arrange for __DEW_TARGET_USER to be the name or id of the target default user
 # in the image. root (the default), will always be stored as 0.
 if [ "$DEW_IMPERSONATE" = "1" ]; then
-  __DEW_TARGET_USER=$(docker image inspect --format '{{ .Config.User }}' "$DEW_IMAGE")
-  if printf %s\\n "$__DEW_TARGET_USER" | grep -qF ':'; then
-    __DEW_TARGET_USER=$(printf %s\\n "$__DEW_TARGET_USER" | cut -d: -f1)
-  fi
+  __DEW_TARGET_USER=$(image_user "$DEW_IMAGE" | cut -d: -f1)
   if ! printf %s\\n "$__DEW_TARGET_USER" | grep -qE '[0-9]+'; then
     if [ -z "$__DEW_TARGET_USER" ] || [ "$__DEW_TARGET_USER" = "root" ]; then
       __DEW_TARGET_USER=0
@@ -633,7 +713,7 @@ fi
 
 # When impersonating pass all environment variables that should be to the
 # container.
-if [ "$DEW_IMPERSONATE" = "1" ]; then
+if [ "$DEW_IMPERSONATE" != "0" ]; then
   vars=$(env | grep -oE '^[A-Z][A-Z0-9_]*=' | sed 's/=$//g')
   for v in $vars; do
     if printf %s\\n "$DEW_BLACKLIST" | grep -q "$v"; then
@@ -685,7 +765,20 @@ if [ "$DEW_RUNTIME" = "podman" ]; then
     fi
   fi
 else
-  if [ "$DEW_IMPERSONATE" = "1" ]; then
+  if [ "$DEW_IMPERSONATE" = "minimal" ]; then
+    set -- -u "$(id -u):$(id -g)" "$@"
+    if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
+      set -- \
+            --entrypoint "fixuid $DEW_SHELL" \
+            "$@"
+    else
+      # Now inject sh.sh as the entrypoint, it will pick the entrypoint and the
+      # command that we have just added.
+      set -- \
+            --entrypoint "fixuid" \
+            "$@"
+    fi
+  elif [ "$DEW_IMPERSONATE" = "1" ]; then
     # We will become root to be able to run su.sh and then become "ourselves"
     # inside the container.
     if [ "$__DEW_TARGET_USER" != "0" ]; then
