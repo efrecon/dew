@@ -176,11 +176,15 @@ if [ "$#" = 0 ] && [ "$DEW_LIST" = "0" ]; then
   die "You must at least provide the name of an image"
 fi
 
+unquote() { sed -E -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'; }
+var_val() { sed -E -e "s/^${1:-"[A-Z_]+"}\s*=\s*//" | unquote ; }
+
 # Get the value of the variable passed as a parameter, without running eval.
 value_of() {
   set |
     grep -E "^${1}\s*=" |
-    sed -E -e "s/^${1}\s*=\s*//" -e "s/^'//" -e "s/'\$//"
+    head -n 1 |
+    var_val "$1"
 }
 
 # Create the XDG directory of type $2 for the tool named $1.
@@ -269,28 +273,19 @@ wrap() {
 # Resolve the value of % enclosed variables with their content in the incoming
 # stream. Do this only for "our" variables, i.e. the ones from this script.
 resolve() {
-  # Construct a set of -e sed expressions, picking each time a separator that
-  # does not appear in the replace value in order to keep sed happy. Build these
-  # onto the only array that we have, i.e. the one to carry incoming arguments.
+  # Construct a set of -e sed expressions. Build these onto the only array that
+  # we have, i.e. the one to carry incoming arguments.
   while IFS= read -r line; do
     # Get the name of the variable, i.e. everything in uppercase before the
     # equal sign printed out by set.
-    var=$(printf %s\\n "$line" | sed -E -e 's/([A-Z_]+)=(.*)/\1/')
+    var=$(printf %s\\n "$line" | grep -Eo '^[A-Z_]+')
     # remove the leading and ending quotes out of the value coming from set, we
     # could run through eval here, but it'll be approx as many processes (so no
     # optimisation possible)
-    val=$(printf %s\\n "$line" | sed -E -e 's/([A-Z_]+)=(.*)/\2/' | sed -E -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
-    for sep in / '!' ';' '&' ',' '|' '^'; do
-      if ! printf %s\\n "$val" | grep -Fq "$sep"; then
-        break
-      fi
-      sep=
-    done
-    if [ -n "$sep" ]; then
-      set -- -e "s${sep}%${var}%${sep}${val}${sep}g" "$@"
-    else
-      log_error "Cannot find a proper sed separator!"
-    fi
+    val=$(printf %s\\n "$line" | var_val "$var")
+    # Construct a sed expression using a non-printable separator (the vertical
+    # tab) so we minimise the risk of its presence in the value.
+    set -- -e "s%${var}%${val}g" "$@"
   done <<EOF
 $(set | grep -E '^DEW_')
 EOF
@@ -308,7 +303,7 @@ baseimage() {
   fi
 }
 
-# shellcheck disable=SC2120
+# shellcheck disable=SC2120 # We are fine with the default in this script!
 hash() {
   sha256sum | grep -Eo '[0-9a-f]+' | cut -c -"${1:-"12"}"
 }
@@ -379,11 +374,18 @@ fi
 
 # Resolve %-enclosed strings (with variable names) in some of our variable
 # values. We want to avoid this as much as possible, but this is necessary to
-# write configuration files more easily.
-DEW_OPTS=$(printf %s\\n "$DEW_OPTS"|resolve)
-DEW_INJECT=$(printf %s\\n "$DEW_INJECT"|resolve)
-DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve)
-
+# write configuration files more easily. It is an expensive operation, so we
+# only do it if necessary (as it won't be in most cases).
+log_trace "Resolving selected vars"
+if printf %s\\n "$DEW_OPTS" | grep -Fq '%DEW_'; then
+  DEW_OPTS=$(printf %s\\n "$DEW_OPTS"|resolve)
+fi
+if printf %s\\n "$DEW_INJECT" | grep -Fq '%DEW_'; then
+  DEW_INJECT=$(printf %s\\n "$DEW_INJECT"|resolve)
+fi
+if printf %s\\n "$DEW_INJECT_ARGS" | grep -Fq '%DEW_'; then
+  DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve)
+fi
 # Rebase (or not) image
 if [ -n "$DEW_REBASE" ]; then
   rebased=$("$DEW_REBASER" \
@@ -563,6 +565,20 @@ if ! docker image inspect "$DEW_IMAGE" >/dev/null 2>&1; then
   docker image pull "$DEW_IMAGE"
 fi
 
+# Arrange for __DEW_TARGET_USER to be the name or id of the target default user
+# in the image. root (the default), will always be stored as 0.
+if [ "$DEW_IMPERSONATE" = "1" ]; then
+  __DEW_TARGET_USER=$(docker image inspect --format '{{ .Config.User }}' "$DEW_IMAGE")
+  if printf %s\\n "$__DEW_TARGET_USER" | grep -qF ':'; then
+    __DEW_TARGET_USER=$(printf %s\\n "$__DEW_TARGET_USER" | cut -d: -f1)
+  fi
+  if ! printf %s\\n "$__DEW_TARGET_USER" | grep -qE '[0-9]+'; then
+    if [ -z "$__DEW_TARGET_USER" ] || [ "$__DEW_TARGET_USER" = "root" ]; then
+      __DEW_TARGET_USER=0
+    fi
+  fi
+fi
+
 # Insert the image's entrypoint (and when relevant command) in front of the
 # arguments when we are going to impersonate (which will replace the
 # entrypoint).
@@ -677,7 +693,7 @@ if [ "$DEW_RUNTIME" = "podman" ]; then
             -e "USER=$USER" \
             --entrypoint "$DEW_SHELL" \
             "$@"
-    else  
+    else
       set -- \
             -e "HOME=$HOME" \
             -e "USER=$USER" \
@@ -692,6 +708,11 @@ if [ "$DEW_RUNTIME" = "podman" ]; then
   fi
 else
   if [ "$DEW_IMPERSONATE" = "1" ]; then
+    # We will become root to be able to run su.sh and then become "ourselves"
+    # inside the container.
+    if [ "$__DEW_TARGET_USER" != "0" ]; then
+      set -- -u "root" "$@"
+    fi
     if [ "$MG_VERBOSITY" = "trace" ]; then
       set -- -e "DEW_DEBUG=1" "$@"
     fi
