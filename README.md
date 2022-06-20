@@ -405,6 +405,10 @@ sign:
 + The path to the file or directory to create (mandatory)
 + The type of the path: `f` or `-` for a file, `d` for a directory. When empty,
   the default, a file will be created through `touch`.
++ A template (file or directory) to initialise the content of the file or
+  directory. In this specification `%` enclosed variable
+  [names](#variables-accessible-to-resolution) will be replaced by their
+  content.
 + The access specification for the path, compatible with the `chmod` command,
   e.g. `0700` or `ug+rw`. When empty, the default, no `chmod` will be performed
   and the file or directory will be created with the user account's default

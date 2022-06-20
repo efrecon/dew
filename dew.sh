@@ -513,38 +513,56 @@ fi
 # specifications, fields separated by colon sign in order:
 # - (full) path to file/directory
 # - Type of path to create f or - (or empty, default): file, d: directory
+# - Path to template for initial content
 # - chmod access, i.e. 0700 or ug+rw. When empty, will be as default
 # - Name/Id of owner for path
 # - Name/Id of group for path
 if [ -n "$DEW_PATHS" ]; then
   for spec in $DEW_PATHS; do
-    path=$(printf %s:::::\\n "$spec" | cut -d: -f1)
+    path=$(printf %s::::::\\n "$spec" | cut -d: -f1)
     if [ -n "$path" ]; then
-      type=$(printf %s:::::\\n "$spec" | cut -d: -f2)
+      type=$(printf %s::::::\\n "$spec" | cut -d: -f2)
+      template=$(printf %s::::::\\n "$spec" | cut -d: -f3)
+      if [ -n "$template" ]; then
+        template=$(printf %s\\n "$template"|resolve)
+      fi
       case "$type" in
         f | - | "")
-          log_debug "Creating file: $path"
-          touch "$path";;
+          if [ -n "$template" ] && [ -f "$template" ]; then
+            log_debug "Copying template $template to $path"
+            cp "$template" "$path"
+          else
+            log_debug "Creating empty file: $path"
+            touch "$path"
+          fi
+          ;;
         d )
-          log_debug "Creating directory: $path"
-          mkdir -p "$path";;
+          if [ -n "$template" ] && [ -d "$template" ]; then
+            log_debug "Copying template files from $template to $path"
+            mkdir -p "$path"
+            cp -a "${template%/}"/* "$path"
+          else
+            log_debug "Creating directory: $path"
+            mkdir -p "$path"
+          fi
+          ;;
         * )
           log_warn "$type is not a recognised path type!";;
       esac
 
       if [ -f "$path" ] || [ -d "$path" ]; then
-        chmod=$(printf %s:::::\\n "$spec" | cut -d: -f3)
+        chmod=$(printf %s::::::\\n "$spec" | cut -d: -f4)
         if [ -n "$chmod" ]; then
-          chmod "$chmod" "$path"
+          chmod -R "$chmod" "$path"
         fi
-        owner=$(printf %s:::::\\n "$spec" | cut -d: -f4)
-        group=$(printf %s:::::\\n "$spec" | cut -d: -f5)
+        owner=$(printf %s::::::\\n "$spec" | cut -d: -f5)
+        group=$(printf %s::::::\\n "$spec" | cut -d: -f6)
         if [ -n "$owner" ] && [ -n "$group" ]; then
-          chown "${owner}:${group}" "$path"
+          chown -R "${owner}:${group}" "$path"
         elif [ -n "$owner" ]; then
-          chown "${owner}" "$path"
+          chown -R "${owner}" "$path"
         elif [ -n "$group" ]; then
-          chgrp "${group}" "$path"
+          chgrp -R "${group}" "$path"
         fi
       else
         log_error "Could not create path $path"
