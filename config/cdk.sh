@@ -10,4 +10,4 @@ fi
 # Upgrade npm to the latest, then install typescript and cdk globally, so they
 # are available at the prompt. This doesn't pin versions, which might be against
 # some dev practices.
-npm update -g npm && npm install -g typescript aws-cdk
+npm update --location=global npm && npm install --location=global typescript aws-cdk
