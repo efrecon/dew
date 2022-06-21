@@ -78,12 +78,13 @@ DEW_NAME=${DEW_NAME:-}
 # created under this user, then passed to the container.
 DEW_XDG=${DEW_XDG:-}
 
-# Should we mount the current directory at the same location inside the
-# destination container. In addition, when the mount is created, the working
-# directory will be set to the mounted directory. When doing this, it is usually
-# a good idea to impersonate the user to arrange for file permissions to be
-# right.
-DEW_MOUNT=${DEW_MOUNT:-1}
+# Number of levels up in the directory hierarchy, starting from current
+# directory, that we should mount into the container. Setting this to a negative
+# number will disable the function. When this is 0, the default, the current
+# directory will only be made available. When set to 1, its parent directory
+# will be made available, etc. When doing this, it is usually a good idea to
+# impersonate the user to arrange for file permissions to be right.
+DEW_MOUNT=${DEW_MOUNT:-0}
 
 # Additional options blindly passed to the docker run command.
 DEW_OPTS=${DEW_OPTS:-}
@@ -162,6 +163,7 @@ parseopts \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
+    m,mount OPTION MOUNT - "Hierarchy levels up from current dir to mount into container, -1 to disable." \
     l,list FLAG LIST - "Print out list of known configs and exit" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
@@ -662,9 +664,17 @@ fi
 
 # Automatically mount the current directory and make it the current directory
 # inside the container as well.
-if [ "$DEW_MOUNT" = "1" ]; then
+if [ "$DEW_MOUNT" -ge "0" ]; then
+  # Climb up from current directory as many levels as DEW_MOUNT: In other words,
+  # when DEW_MOUNT is 0, don't climb up. When it is 1, pick up the parent
+  # directory, and so on.
+  mntdir=$(pwd)
+  for _ in $(seq 1 "$DEW_MOUNT"); do
+    mntdir=$(dirname "$mntdir")
+  done
+
   set -- \
-        -v "$(pwd):$(pwd)" \
+        -v "${mntdir}:${mntdir}" \
         -w "$(pwd)" \
         "$@"
 fi

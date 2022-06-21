@@ -337,9 +337,19 @@ proper permissions.
 
 ### `DEW_MOUNT`
 
-This variable is a boolean. When set to 1, the default, the current directory
-will be mounted at the same location in the destination container. This
-directory will also be made the current directory inside the container.
+This variable expresses the number of levels up the directory hierarchy,
+starting from the current one, should be mounted into the container. A negative
+number turns off the function entirely. When positive, the working directory in
+the container maps to the current directory. Setting this to strictly positive
+values will facilitate accessing (development) files upwards in the tree. In
+other words:
+
++ Setting `DEW_MOUNT` to `0` (the default) mounts the current directory inside
+  the container and makes it the working directory.
++ Setting `DEW_MOUNT` to `1` mounts the parent of the current directory inside
+  the container, and makes the current directory the working directory. This
+  enables the container to access all files and directories contained in the
+  parent directory.
 
 ### `DEW_OPTS`
 
