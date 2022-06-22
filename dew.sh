@@ -178,11 +178,40 @@ if [ "$#" = 0 ] && [ "$DEW_LIST" = "0" ]; then
   die "You must at least provide the name of an image"
 fi
 
-unquote() { sed -E -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'; }
+# Remove leading and ending quote pairs from all lines when both are present. Do
+# this a finite number of times. The implementation uses shell builtins as
+# much as possible as an optimisation.
+# shellcheck disable=SC2120    # We never use the param, but good to have!
+unquote() {
+  stack_let _iter
+  stack_let line
+  while IFS= read -r line; do
+    for _iter in $(seq 1 "${1:-6}"); do
+      if [ "${line#\'}" != "$line" ] && [ "${line%\'}" != "$line" ]; then
+        line=${line#\'}
+        line=${line%\'}
+      elif [ "${line#\"}" != "$line" ] && [ "${line%\"}" != "$line" ]; then
+        line=${line#\"}
+        line=${line%\"}
+      else
+        break
+      fi
+    done
+    printf %s\\n "$line"
+  done
+  stack_unlet _iter
+  stack_unlet line
+}
+
+# Isolate the value of variables passed on stdin, i.e. remove XXX= from the
+# lines. The default is to assume variables are all uppercase.
 var_val() { sed -E -e "s/^${1:-"[A-Z_]+"}\s*=\s*//" | unquote ; }
 
-# Get the value of the variable passed as a parameter, without running eval.
+# Get the value of the variable passed as a parameter, without running eval,
+# i.e. through picking from the result of set
 value_of() {
+  # This forces in the exact name of the variable by performing a grep call that
+  # contains both the name of the variable to look for AND the equal sign.
   set |
     grep -E "^${1}\s*=" |
     head -n 1 |
@@ -262,7 +291,7 @@ summary() {
 wrap() {
   stack_let max=
   stack_let l_indent=
-  stack_let wrap=${3:-80}
+  stack_let wrap="${3:-80}"
 
   #shellcheck disable=SC2034 # We USE l_indent to compute wrapping max!
   l_lindent=${#2}
@@ -418,6 +447,7 @@ if [ -n "$DEW_INJECT" ]; then
   # Use or create a shell script to run the command
   if [ -f "$DEW_INJECT" ]; then
     tmpdir=
+    log_debug "Using injection script: $DEW_INJECT"
   else
     tmpdir=$(mktemp -d)
     printf '#!/bin/sh\n' > "${tmpdir}/init.sh"
