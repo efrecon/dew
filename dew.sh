@@ -96,6 +96,12 @@ DEW_SHELL=${DEW_SHELL:-}
 # Version of the docker client to download
 DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-20.10.6}
 
+# (Docker) network for container. The default is to start containers inside the
+# same network as the host to make their services easily available without
+# exposing ports. If you want to export ports, change this to bridge and expose
+# the ports through DEW_OPTS.
+DEW_NETWORK=${DEW_NETWORK:-"host"}
+
 # Installation directory inside containers where we will inject stuff, whenever
 # relevant and necessary.
 DEW_INSTALLDIR=${DEW_INSTALLDIR:-/usr/local/bin}
@@ -603,7 +609,7 @@ if [ -n "$DEW_PATHS" ]; then
   done
 fi
 
-log_info "Kickstarting a transient host container based on $DEW_IMAGE"
+log_info "Kickstarting a transient container based on $DEW_IMAGE in network $DEW_NETWORK"
 
 # Remember number of arguments we had after the name of the image.
 __DEW_NB_ARGS="$#"
@@ -810,7 +816,7 @@ fi
 # share the host network.
 set --  --rm \
         --init \
-        --network host \
+        --network "$DEW_NETWORK" \
         -v /etc/localtime:/etc/localtime:ro \
         --name "$DEW_NAME" \
         "$@"
