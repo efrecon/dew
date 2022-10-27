@@ -165,8 +165,9 @@ parseopts \
     xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     j,inject OPTION INJECT - "Inject this command (can be an executable script) into the original image, then run from the resulting image. This is a poorman's (Dockerfile) RUN." \
-    inject-args OPTION INJECT_ARGS - "Arguments to the injection comman" \
+    inject-args OPTION INJECT_ARGS - "Arguments to the injection command" \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
+    n,network OPTION NETWORK - "Docker network to use for container" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
     m,mount OPTION MOUNT - "Hierarchy levels up from current dir to mount into container, -1 to disable." \
