@@ -8,4 +8,4 @@ elif command -v apt-get >/dev/null 2>&1; then
 fi
 
 # Upgrade npm to the latest
-npm update -g npm
+npm update --location=global npm

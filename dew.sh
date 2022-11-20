@@ -78,12 +78,13 @@ DEW_NAME=${DEW_NAME:-}
 # created under this user, then passed to the container.
 DEW_XDG=${DEW_XDG:-}
 
-# Should we mount the current directory at the same location inside the
-# destination container. In addition, when the mount is created, the working
-# directory will be set to the mounted directory. When doing this, it is usually
-# a good idea to impersonate the user to arrange for file permissions to be
-# right.
-DEW_MOUNT=${DEW_MOUNT:-1}
+# Number of levels up in the directory hierarchy, starting from current
+# directory, that we should mount into the container. Setting this to a negative
+# number will disable the function. When this is 0, the default, the current
+# directory will only be made available. When set to 1, its parent directory
+# will be made available, etc. When doing this, it is usually a good idea to
+# impersonate the user to arrange for file permissions to be right.
+DEW_MOUNT=${DEW_MOUNT:-0}
 
 # Additional options blindly passed to the docker run command.
 DEW_OPTS=${DEW_OPTS:-}
@@ -97,6 +98,12 @@ DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-"20.10.21"}
 
 # Version of the fixuid binary to download
 DEW_FIXUID_VERSION=${DEW_FIXUID_VERSION:-"0.5.1"}
+
+# (Docker) network for container. The default is to start containers inside the
+# same network as the host to make their services easily available without
+# exposing ports. If you want to export ports, change this to bridge and expose
+# the ports through DEW_OPTS.
+DEW_NETWORK=${DEW_NETWORK:-"host"}
 
 # Installation directory inside containers where we will inject stuff, whenever
 # relevant and necessary.
@@ -164,10 +171,12 @@ parseopts \
     xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     j,inject OPTION INJECT - "Inject this command (can be an executable script) into the original image, then run from the resulting image. This is a poorman's (Dockerfile) RUN." \
-    inject-args OPTION INJECT_ARGS - "Arguments to the injection comman" \
+    inject-args OPTION INJECT_ARGS - "Arguments to the injection command" \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
+    n,network OPTION NETWORK - "Docker network to use for container" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
+    m,mount OPTION MOUNT - "Hierarchy levels up from current dir to mount into container, -1 to disable." \
     l,list FLAG LIST - "Print out list of known configs and exit" \
     h,help FLAG @HELP - "Print this help and exit" \
   -- "$@"
@@ -182,11 +191,40 @@ if [ "$#" = 0 ] && [ "$DEW_LIST" = "0" ]; then
   die "You must at least provide the name of an image"
 fi
 
-unquote() { sed -E -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'; }
+# Remove leading and ending quote pairs from all lines when both are present. Do
+# this a finite number of times. The implementation uses shell builtins as
+# much as possible as an optimisation.
+# shellcheck disable=SC2120    # We never use the param, but good to have!
+unquote() {
+  stack_let _iter
+  stack_let line
+  while IFS= read -r line; do
+    for _iter in $(seq 1 "${1:-6}"); do
+      if [ "${line#\'}" != "$line" ] && [ "${line%\'}" != "$line" ]; then
+        line=${line#\'}
+        line=${line%\'}
+      elif [ "${line#\"}" != "$line" ] && [ "${line%\"}" != "$line" ]; then
+        line=${line#\"}
+        line=${line%\"}
+      else
+        break
+      fi
+    done
+    printf %s\\n "$line"
+  done
+  stack_unlet _iter
+  stack_unlet line
+}
+
+# Isolate the value of variables passed on stdin, i.e. remove XXX= from the
+# lines. The default is to assume variables are all uppercase.
 var_val() { sed -E -e "s/^${1:-"[A-Z_]+"}\s*=\s*//" | unquote ; }
 
-# Get the value of the variable passed as a parameter, without running eval.
+# Get the value of the variable passed as a parameter, without running eval,
+# i.e. through picking from the result of set
 value_of() {
+  # This forces in the exact name of the variable by performing a grep call that
+  # contains both the name of the variable to look for AND the equal sign.
   set |
     grep -E "^${1}\s*=" |
     head -n 1 |
@@ -266,7 +304,7 @@ summary() {
 wrap() {
   stack_let max=
   stack_let l_indent=
-  stack_let wrap=${3:-80}
+  stack_let wrap="${3:-80}"
 
   #shellcheck disable=SC2034 # We USE l_indent to compute wrapping max!
   l_lindent=${#2}
@@ -551,7 +589,8 @@ fi
 # Cut out the possible tag/sha256 at the end of the image name and extract the
 # main name to be used as part of the automatically generated container name.
 # ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
-bn=$(basename "$(printf %s\\n "$1" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')")
+bn=$(basename "$(printf %s\\n "$1" |
+                 sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')")
 [ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
 DEW_IMAGE=$1
 shift; # Jump to the arguments
@@ -567,7 +606,7 @@ if [ -n "$DEW_CONFIG" ]; then
   for v in $_OPTS; do
     eval "$(printf %s\\n "$_ENV" | grep "^${v}=")"
   done
-  # shellcheck disable=SC2034 # We make this available for resolution (see below)
+  # shellcheck disable=SC2034 # We will make this available for resolution
   DEW_CONFIGDIR=$(dirname "$DEW_CONFIG")
 fi
 
@@ -594,7 +633,11 @@ if [ -n "$DEW_REBASE" ]; then
     DEW_IMAGE=$rebased
   else
     log_notice "Rebasing $DEW_IMAGE on top of $DEW_REBASE"
-    DEW_IMAGE=$("$DEW_REBASER" --verbose notice --base "$DEW_REBASE" -- "$DEW_IMAGE")
+    DEW_IMAGE=$("$DEW_REBASER" \
+                  --verbose notice \
+                  --base "$DEW_REBASE" \
+                  -- \
+                    "$DEW_IMAGE")
   fi
 fi
 
@@ -612,38 +655,56 @@ if [ "$DEW_DOCKER" = "1" ]; then install_docker; fi
 # specifications, fields separated by colon sign in order:
 # - (full) path to file/directory
 # - Type of path to create f or - (or empty, default): file, d: directory
+# - Path to template for initial content
 # - chmod access, i.e. 0700 or ug+rw. When empty, will be as default
 # - Name/Id of owner for path
 # - Name/Id of group for path
 if [ -n "$DEW_PATHS" ]; then
   for spec in $DEW_PATHS; do
-    path=$(printf %s:::::\\n "$spec" | cut -d: -f1)
+    path=$(printf %s::::::\\n "$spec" | cut -d: -f1)
     if [ -n "$path" ]; then
-      type=$(printf %s:::::\\n "$spec" | cut -d: -f2)
+      type=$(printf %s::::::\\n "$spec" | cut -d: -f2)
+      template=$(printf %s::::::\\n "$spec" | cut -d: -f3)
+      if [ -n "$template" ]; then
+        template=$(printf %s\\n "$template"|resolve)
+      fi
       case "$type" in
         f | - | "")
-          log_debug "Creating file: $path"
-          touch "$path";;
+          if [ -n "$template" ] && [ -f "$template" ]; then
+            log_debug "Copying template $template to $path"
+            cp "$template" "$path"
+          else
+            log_debug "Creating empty file: $path"
+            touch "$path"
+          fi
+          ;;
         d )
-          log_debug "Creating directory: $path"
-          mkdir -p "$path";;
+          if [ -n "$template" ] && [ -d "$template" ]; then
+            log_debug "Copying template files from $template to $path"
+            mkdir -p "$path"
+            cp -a "${template%/}"/* "$path"
+          else
+            log_debug "Creating directory: $path"
+            mkdir -p "$path"
+          fi
+          ;;
         * )
           log_warn "$type is not a recognised path type!";;
       esac
 
       if [ -f "$path" ] || [ -d "$path" ]; then
-        chmod=$(printf %s:::::\\n "$spec" | cut -d: -f3)
+        chmod=$(printf %s::::::\\n "$spec" | cut -d: -f4)
         if [ -n "$chmod" ]; then
-          chmod "$chmod" "$path"
+          chmod -R "$chmod" "$path"
         fi
-        owner=$(printf %s:::::\\n "$spec" | cut -d: -f4)
-        group=$(printf %s:::::\\n "$spec" | cut -d: -f5)
+        owner=$(printf %s::::::\\n "$spec" | cut -d: -f5)
+        group=$(printf %s::::::\\n "$spec" | cut -d: -f6)
         if [ -n "$owner" ] && [ -n "$group" ]; then
-          chown "${owner}:${group}" "$path"
+          chown -R "${owner}:${group}" "$path"
         elif [ -n "$owner" ]; then
-          chown "${owner}" "$path"
+          chown -R "${owner}" "$path"
         elif [ -n "$group" ]; then
-          chgrp "${group}" "$path"
+          chgrp -R "${group}" "$path"
         fi
       else
         log_error "Could not create path $path"
@@ -652,7 +713,7 @@ if [ -n "$DEW_PATHS" ]; then
   done
 fi
 
-log_info "Kickstarting a transient host container based on $DEW_IMAGE"
+log_info "Kickstarting a transient container based on $DEW_IMAGE in network $DEW_NETWORK"
 
 # Remember number of arguments we had after the name of the image.
 __DEW_NB_ARGS="$#"
@@ -693,6 +754,7 @@ fi
 # Insert the image's entrypoint (and when relevant command) in front of the
 # arguments when we are going to impersonate (which will replace the
 # entrypoint).
+
 __DEW_BASEIMAGE=$(baseimage "$DEW_IMAGE")
 if { [ "$DEW_IMPERSONATE" = "1" ] || [ "$DEW_IMPERSONATE" = "minimal" ]; } && { [ -z "$DEW_SHELL" ] || [ "$DEW_SHELL" = "-" ]; }; then
   # Inject the command
@@ -753,9 +815,17 @@ fi
 
 # Automatically mount the current directory and make it the current directory
 # inside the container as well.
-if [ "$DEW_MOUNT" = "1" ]; then
+if [ "$DEW_MOUNT" -ge "0" ]; then
+  # Climb up from current directory as many levels as DEW_MOUNT: In other words,
+  # when DEW_MOUNT is 0, don't climb up. When it is 1, pick up the parent
+  # directory, and so on.
+  mntdir=$(pwd)
+  for _ in $(seq 1 "$DEW_MOUNT"); do
+    mntdir=$(dirname "$mntdir")
+  done
+
   set -- \
-        -v "$(pwd):$(pwd)" \
+        -v "${mntdir}:${mntdir}" \
         -w "$(pwd)" \
         "$@"
 fi
@@ -782,7 +852,9 @@ if [ "$DEW_DOCKER" = "1" ]; then
   fi
 fi
 
-if is_true "$DEW_INTERACTIVE" || { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ] && [ "$__DEW_NB_ARGS" = "0" ]; }; then
+if is_true "$DEW_INTERACTIVE" || \
+    { [ "$(to_lower "$DEW_INTERACTIVE")" = "auto" ] && \
+      [ "$__DEW_NB_ARGS" = "0" ]; }; then
   set -- \
         -it \
         -a stdin -a stdout -a stderr \
@@ -878,7 +950,7 @@ fi
 # share the host network.
 set --  --rm \
         --init \
-        --network host \
+        --network "$DEW_NETWORK" \
         -v /etc/localtime:/etc/localtime:ro \
         --name "$DEW_NAME" \
         "$@"

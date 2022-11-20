@@ -349,9 +349,19 @@ proper permissions.
 
 ### `DEW_MOUNT`
 
-This variable is a boolean. When set to 1, the default, the current directory
-will be mounted at the same location in the destination container. This
-directory will also be made the current directory inside the container.
+This variable expresses the number of levels up the directory hierarchy,
+starting from the current one, should be mounted into the container. A negative
+number turns off the function entirely. When positive, the working directory in
+the container maps to the current directory. Setting this to strictly positive
+values will facilitate accessing (development) files upwards in the tree. In
+other words:
+
++ Setting `DEW_MOUNT` to `0` (the default) mounts the current directory inside
+  the container and makes it the working directory.
++ Setting `DEW_MOUNT` to `1` mounts the parent of the current directory inside
+  the container, and makes the current directory the working directory. This
+  enables the container to access all files and directories contained in the
+  parent directory.
 
 ### `DEW_OPTS`
 
@@ -417,6 +427,10 @@ sign:
 + The path to the file or directory to create (mandatory)
 + The type of the path: `f` or `-` for a file, `d` for a directory. When empty,
   the default, a file will be created through `touch`.
++ A template (file or directory) to initialise the content of the file or
+  directory. In this specification `%` enclosed variable
+  [names](#variables-accessible-to-resolution) will be replaced by their
+  content.
 + The access specification for the path, compatible with the `chmod` command,
   e.g. `0700` or `ug+rw`. When empty, the default, no `chmod` will be performed
   and the file or directory will be created with the user account's default
