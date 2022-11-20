@@ -24,7 +24,7 @@ while getopts "u:g:i:h-" opt; do
     u) # Name or identifier of user to target inside image
       FIXUID_USER="$OPTARG";;
     g) # Name or identifier of group to target inside image
-      FIXUID_USER="$OPTARG";;
+      FIXUID_GROUP="$OPTARG";;
     i) # Install fixuid binary from this path
       FIXUID_INSTALL="$OPTARG";;
     -) # End of options, everything after blindly executed

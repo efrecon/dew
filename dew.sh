@@ -93,10 +93,10 @@ DEW_OPTS=${DEW_OPTS:-}
 DEW_SHELL=${DEW_SHELL:-}
 
 # Version of the docker client to download
-DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-20.10.6}
+DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-"20.10.21"}
 
 # Version of the fixuid binary to download
-DEW_FIXUID_VERSION=${DEW_FIXUID_VERSION:-}
+DEW_FIXUID_VERSION=${DEW_FIXUID_VERSION:-"0.5.1"}
 
 # Installation directory inside containers where we will inject stuff, whenever
 # relevant and necessary.
@@ -301,8 +301,14 @@ EOF
   exec "$@"
 }
 
+# Is image passed as a parameter an injected image
+injected() {
+  printf %s\\n "$1" | grep -qE ":${DEW_INJECT_TAG_PREFIX}[a-f0-9]{12}_[a-f0-9]{12}\$"
+}
+
+# Return name of original image, when injected image, or the name of the image
 baseimage() {
-  if printf %s\\n "$1" | grep -qE ":${DEW_INJECT_TAG_PREFIX}[a-f0-9]{32}\$"; then
+  if injected "$1"; then
     "${DEW_RUNTIME}" image inspect --format '{{ .Comment }}' "$1"
   else
     printf %s\\n "$1"
@@ -314,6 +320,8 @@ hash() {
   sha256sum | grep -Eo '[0-9a-f]+' | cut -c -"${1:-"12"}"
 }
 
+# Guess version of GH project passed as a parameter using the tags in the HTML
+# description.
 version() {
   log_debug "Guessing latest stable version for project $1"
   # This works on the HTML from GitHub as follows:
@@ -326,13 +334,20 @@ version() {
   # 5. Extract only pure SemVer sharp versions
   # 6. Just keep the top one, i.e. the latest release.
   download "${DEW_GITHUB}/${1}/tags" -|
-    grep -E "<a href=\"/${1}/releases/tag/v?[0-9]" |
+    grep -Eo "<a href=\"/${1}/releases/tag/v?[0-9][^\"]*" |
     awk -F'[/\"]' '{print $7}' |
     sed 's/^v//g' |
     grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' |
     head -1
 }
 
+# Install the content of a remote compressed tar file in the XDG cache
+# directory. Args:
+#   $1 is internal name of binary
+#   $2 is version (no leading v).
+#   $3 is location of the tar file
+#   $4 is name of project at GitHub
+#   $5 is printable name of project
 _tgz_installer() {
   if ! [ -f "${XDG_CACHE_HOME}/dew/$1_$2" ]; then
     log_notice "Downloading ${5:-"tarfile"} v$2"
@@ -372,17 +387,44 @@ install_fixuid() {
     fixuid
 }
 
+# Reverse order of lines (tac emulation, tac is cat in reverse)
+# shellcheck disable=SC2120  # no args==take from stdin
+tac() {
+  awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' "$@"
+}
+
+# Query image for the user:group to be used. This will peek into the
+# /etc/password file to discover if a used is created in the image and pick that
+# one whenever it exists.
+query_user() {
+  _qimg=$1; shift
+  uspec=$("${DEW_RUNTIME}" run --rm -v "${DEW_ROOTDIR}/prefuser.sh:/tmp/prefuser.sh:ro" --entrypoint /tmp/prefuser.sh "$_qimg" "$@")
+  if [ -z "$uspec" ]; then
+    printf 0:0\\n
+  else
+    printf %s\\n "$uspec"
+  fi
+}
+
+# Return user:group to use with the passed as a parameter. This is able to guess
+# a good user out of the ones created inside the image.
 image_user() {
   img_user=$("${DEW_RUNTIME}" image inspect --format '{{ .Config.User }}' "$1")
   if printf %s\\n "$img_user" | grep -qF ':'; then
     printf %s\\n "$img_user"
   elif [ -z "$img_user" ]; then
-    printf %d:%d\\n 0 0
+    query_user "$1"
+  elif [ "$img_user" = "0" ]; then
+    query_user "$1"
   else
-    printf %s:%s\\n "$img_user" "$("${DEW_RUNTIME}" run --rm --entrypoint id "$1" -g)"
+    query_user "$1" 0
   fi
 }
 
+
+# Inject a command in the current image and save the result in a new image that
+# will be used for all further operations. The command is always executed as
+# root inside the original image.
 inject() {
   # Extract the raw (untagged) name of the image
   img=$(printf %s\\n "$DEW_IMAGE" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')
@@ -422,7 +464,7 @@ inject() {
       log_debug "Removing dangling injected siblings..."
       "${DEW_RUNTIME}" image ls --format '{{ .Tag }}' "$img" | while IFS= read -r tag; do
         if printf %s\\n "$tag" | grep -qE "^$DEW_INJECT_TAG_PREFIX"; then
-          if [ "$(baseimage "${img}:${tag}")" = "$DEW_IMAGE" ]; then
+          if [ "$(baseimage "${img}:${tag}")" = "$DEW_IMAGE" ] && [ "${img}:${tag}" != "$DEW_IMAGE" ]; then
             if "${DEW_RUNTIME}" image rm -f "${img}:${tag}" >/dev/null; then
               log_info "Removed dangling injected image ${img}:${tag}"
             else
@@ -449,7 +491,7 @@ inject() {
       $injector_args
     log_debug "Run $injector $injector_args in $DEW_IMAGE, generated container $DEW_NAME"
     "${DEW_RUNTIME}" commit \
-      --message "$DEW_IMAGE" \
+      --message "$(baseimage "$DEW_IMAGE")" \
       -- \
       "$DEW_NAME" "$injected_img" >/dev/null
     log_debug "Generated local image $injected_img for future runs"
@@ -464,6 +506,8 @@ inject() {
   fi
 }
 
+
+# Start by taking care of the specical case of configuration listing first.
 if [ "$DEW_LIST" = "1" ]; then
   if [ "$#" = "0" ]; then
     for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
@@ -620,11 +664,15 @@ if ! "$DEW_RUNTIME" image inspect "$DEW_IMAGE" >/dev/null 2>&1; then
   "$DEW_RUNTIME" image pull "$DEW_IMAGE"
 fi
 
+# When we are using minimal impersonation, we will become our current user
+# inside the container. We will use fixuid to map the id of the user:group that
+# exists inside the image into our values.
 if [ "$DEW_IMPERSONATE" = "minimal" ]; then
   install_fixuid;  # Will discover DEW_FIXUID_VERSION if none specified
   IFS=: read -r __DEW_TARGET_USER __DEW_TARGET_GROUP <<EOF
 $(image_user "$DEW_IMAGE")
 EOF
+  log_debug "Target user and group: ${__DEW_TARGET_USER}:${__DEW_TARGET_GROUP}"
   inject \
     "${DEW_ROOTDIR}/fixuid.sh" \
     "-u $__DEW_TARGET_USER -g $__DEW_TARGET_GROUP -i /tmp/fixuid_${DEW_FIXUID_VERSION}" \
@@ -645,15 +693,16 @@ fi
 # Insert the image's entrypoint (and when relevant command) in front of the
 # arguments when we are going to impersonate (which will replace the
 # entrypoint).
-if [ "$DEW_IMPERSONATE" = "1" ] && { [ -z "$DEW_SHELL" ] || [ "$DEW_SHELL" = "-" ]; }; then
+__DEW_BASEIMAGE=$(baseimage "$DEW_IMAGE")
+if { [ "$DEW_IMPERSONATE" = "1" ] || [ "$DEW_IMPERSONATE" = "minimal" ]; } && { [ -z "$DEW_SHELL" ] || [ "$DEW_SHELL" = "-" ]; }; then
   # Inject the command
   if [ "$__DEW_NB_ARGS" = "0" ]; then
     while IFS= read -r arg; do
       [ -n "$arg" ] && set -- "$arg" "$@"
     done <<EOF
 $(docker image inspect \
-      --format '{{ join .Config.Cmd "\n" }}' "$(baseimage "$DEW_IMAGE")" |
-  awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
+      --format '{{ join .Config.Cmd "\n" }}' "$__DEW_BASEIMAGE" |
+  tac)
 EOF
   fi
   # Inject the entrypoint
@@ -661,8 +710,8 @@ EOF
     [ -n "$arg" ] && set -- "$arg" "$@"
   done <<EOF
 $(docker image inspect \
-      --format '{{ join .Config.Entrypoint "\n" }}' "$(baseimage "$DEW_IMAGE")" |
-  awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
+      --format '{{ join .Config.Entrypoint "\n" }}' "$__DEW_BASEIMAGE" |
+  tac)
 EOF
 fi
 
@@ -766,17 +815,23 @@ if [ "$DEW_RUNTIME" = "podman" ]; then
   fi
 else
   if [ "$DEW_IMPERSONATE" = "minimal" ]; then
+    # Minimal impersonation, we will run container as our user and group
     set -- -u "$(id -u):$(id -g)" "$@"
+    # Make sure that whatever would have been requested to be run is run through
+    # fixuid. We have to resort to using an entrypoint and a file containing
+    # what to execute because it is not possible to use the "exec" form from the
+    # command-line docker client --entrypoint.
+    cmds=$(mktemp -t "dew_XXXXXX")
+    printf 'fixuid\n-q\n' > "$cmds"
+    set -- \
+          -v "${cmds}:/etc/dew.cmd:ro" \
+          -v "${DEW_ROOTDIR}/entrypoint.sh:/tmp/dew-entrypoint.sh:ro" \
+          --entrypoint "/tmp/dew-entrypoint.sh" \
+          "$@"
+    # When we have to override the entrypoint, push it to the list of commands
+    # to execute.
     if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
-      set -- \
-            --entrypoint "fixuid $DEW_SHELL" \
-            "$@"
-    else
-      # Now inject sh.sh as the entrypoint, it will pick the entrypoint and the
-      # command that we have just added.
-      set -- \
-            --entrypoint "fixuid" \
-            "$@"
+      printf %s\\n "$DEW_SHELL" >> "$cmds"
     fi
   elif [ "$DEW_IMPERSONATE" = "1" ]; then
     # We will become root to be able to run su.sh and then become "ourselves"
