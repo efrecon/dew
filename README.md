@@ -309,12 +309,24 @@ This variable is a comma-separated list of environment variables that will
 
 ### `DEW_IMPERSONATE`
 
-This variable is a boolean. When set to 1, the default, impersonation will
-happen, i.e. the process or interactive prompt inside the container will run
-under a user with the same user and group identifiers as the ones of the calling
-user. In addition, in interactive containers, the user inside the container will
-be given the same `HOME` directory as the original user, albeit empty (except
-perhaps for the current path, see [`DEW_MOUNT`](#dewmount)).
+This variable is a type or a boolean. When set to `1`, the default,
+impersonation will happen, i.e. the process or interactive prompt inside the
+container will run under a user with the same user and group identifiers as the
+ones of the calling user. In addition, in interactive containers, the user
+inside the container will be given the same `HOME` directory as the original
+user, albeit empty (except perhaps for the current path, see
+[`DEW_MOUNT`](#dewmount)). Impersonation works by running the container as
+`root`, but injecting an impersonation script that will setup a minimal
+environment inside the container before becoming to relevant user and group.
+
+When the variable is set to `minimal`, minimal impersonation will happen
+instead. This means that the identifier of the first regular user present inside
+the image will be used for impersonation. The container is then run using the
+[`--user`][user] option, but [`fixuid`][fixuid] is injected and used to arrange
+for proper access rights for files.
+
+  [user]: https://docs.docker.com/engine/reference/run/#user
+  [fixuid]: https://github.com/boxboat/fixuid
 
 ### `DEW_INTERACTIVE`
 
