@@ -27,12 +27,17 @@ while getopts "c:h-" opt; do
 done
 shift $((OPTIND-1))
 
+# Reverse order of lines (tac emulation, tac is cat in reverse)
+# shellcheck disable=SC2120  # no args==take from stdin
+tac() {
+  awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' "$@"
+}
 
 if [ -f "$ENTRYPOINT_CMDFILE" ]; then
   while IFS= read -r cmd; do
     set -- "$cmd" "$@"
   done <<EOF
-$(awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' "$ENTRYPOINT_CMDFILE")
+$(tac "$ENTRYPOINT_CMDFILE")
 EOF
 fi
 
