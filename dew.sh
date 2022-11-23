@@ -191,81 +191,13 @@ if [ "$#" = 0 ] && [ "$DEW_LIST" = "0" ]; then
   die "You must at least provide the name of an image"
 fi
 
-# Remove leading and ending quote pairs from all lines when both are present. Do
-# this a finite number of times. The implementation uses shell builtins as
-# much as possible as an optimisation.
-# shellcheck disable=SC2120    # We never use the param, but good to have!
-unquote() {
-  stack_let _iter
-  stack_let line
-  while IFS= read -r line; do
-    for _iter in $(seq 1 "${1:-6}"); do
-      if [ "${line#\'}" != "$line" ] && [ "${line%\'}" != "$line" ]; then
-        line=${line#\'}
-        line=${line%\'}
-      elif [ "${line#\"}" != "$line" ] && [ "${line%\"}" != "$line" ]; then
-        line=${line#\"}
-        line=${line%\"}
-      else
-        break
-      fi
-    done
-    printf %s\\n "$line"
-  done
-  stack_unlet _iter
-  stack_unlet line
-}
+# Read our internal modules, not all independent
+MG_LIBPATH=${DEW_ROOTDIR}/libexec:${MG_LIBPATH}
+module installer xdg vars inject mkpath
 
-# Isolate the value of variables passed on stdin, i.e. remove XXX= from the
-# lines. The default is to assume variables are all uppercase.
-var_val() { sed -E -e "s/^${1:-"[A-Z_]+"}\s*=\s*//" | unquote ; }
-
-# Get the value of the variable passed as a parameter, without running eval,
-# i.e. through picking from the result of set
-value_of() {
-  # This forces in the exact name of the variable by performing a grep call that
-  # contains both the name of the variable to look for AND the equal sign.
-  set |
-    grep -E "^${1}\s*=" |
-    head -n 1 |
-    var_val "$1"
-}
-
-# Create the XDG directory of type $2 for the tool named $1.
-xdg() (
-  if [ -z "${1:-}" ]; then
-    d=$(value_of "XDG_${2}_${3:-HOME}")
-  else
-    d=$(value_of "XDG_${2}_${3:-HOME}")/$1
-  fi
-  if ! [ -d "$d" ]; then
-    if mkdir -p "$d" 2>/dev/null; then
-      log_info "Created XDG $(to_lower "$2") directory at $d"
-    elif [ "${4:-0}" = "1" ]; then
-      if [ -z "${1:-}" ]; then
-        d=$(mktemp -dt "tmp-${MG_CMDNAME}-$$-$(to_lower "$2").XXXXXX")
-      else
-        d=$(mktemp -dt "tmp-${MG_CMDNAME}-$$-$(to_lower "$2")-${1}.XXXXXX")
-      fi
-      log_info "Created temporary XDG $(to_lower "$2") directory at $d, this is not XDG compliant and might have unknown side-effects"
-    fi
-  fi
-
-  if [ -d "$d" ]; then
-    printf %s\\n "$d"
-  fi
-)
-
-# Download the url passed as the first argument to the destination path passed
-# as a second argument. The destination will be the same as the basename of the
-# URL, in the current directory, if omitted.
-download() {
-  if command -v curl >/dev/null; then
-    curl -sSL -o "${2:-$(basename "$1")}" "$1"
-  elif command -v wget >/dev/null; then
-    wget -q -O "${2:-$(basename "$1")}" "$1"
-  fi
-}
+# Directory where internal scripts are stored and used when setting up
+# containers.
+DEW_BINDIR=${DEW_ROOTDIR}/bin
 
 # Checks that the configuration file passed as an argument is valid.
 check_config() {
@@ -314,116 +246,6 @@ wrap() {
   stack_unlet max l_indent wrap
 }
 
-# Resolve the value of % enclosed variables with their content in the incoming
-# stream. Do this only for "our" variables, i.e. the ones from this script.
-resolve() {
-  # Construct a set of -e sed expressions. Build these onto the only array that
-  # we have, i.e. the one to carry incoming arguments.
-  while IFS= read -r line; do
-    # Get the name of the variable, i.e. everything in uppercase before the
-    # equal sign printed out by set.
-    var=$(printf %s\\n "$line" | grep -Eo '^[A-Z_]+')
-    # remove the leading and ending quotes out of the value coming from set, we
-    # could run through eval here, but it'll be approx as many processes (so no
-    # optimisation possible)
-    val=$(printf %s\\n "$line" | var_val "$var")
-    # Construct a sed expression using a non-printable separator (the vertical
-    # tab) so we minimise the risk of its presence in the value.
-    set -- -e "s%${var}%${val}g" "$@"
-  done <<EOF
-$(set | grep -E '^DEW_')
-EOF
-  # Build the final sed command and execute it, it will perform all
-  # substitutions in one go and dump them onto the stdout.
-  set -- sed "$@"
-  exec "$@"
-}
-
-# Is image passed as a parameter an injected image
-injected() {
-  printf %s\\n "$1" | grep -qE ":${DEW_INJECT_TAG_PREFIX}[a-f0-9]{12}_[a-f0-9]{12}\$"
-}
-
-# Return name of original image, when injected image, or the name of the image
-baseimage() {
-  if injected "$1"; then
-    "${DEW_RUNTIME}" image inspect --format '{{ .Comment }}' "$1"
-  else
-    printf %s\\n "$1"
-  fi
-}
-
-# shellcheck disable=SC2120 # We are fine with the default in this script!
-hash() {
-  sha256sum | grep -Eo '[0-9a-f]+' | cut -c -"${1:-"12"}"
-}
-
-# Guess version of GH project passed as a parameter using the tags in the HTML
-# description.
-version() {
-  log_debug "Guessing latest stable version for project $1"
-  # This works on the HTML from GitHub as follows:
-  # 1. Start from the list of tags, they point to the corresponding release.
-  # 2. Extract references to the release page, force a possible v and a number
-  #    at start of sub-path
-  # 3. Use slash and quote as separators and extract the tag/release number with
-  #    awk. This is a bit brittle.
-  # 4. Remove leading v, if there is one (there will be in most cases!)
-  # 5. Extract only pure SemVer sharp versions
-  # 6. Just keep the top one, i.e. the latest release.
-  download "${DEW_GITHUB}/${1}/tags" -|
-    grep -Eo "<a href=\"/${1}/releases/tag/v?[0-9][^\"]*" |
-    awk -F'[/\"]' '{print $7}' |
-    sed 's/^v//g' |
-    grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' |
-    head -1
-}
-
-# Install the content of a remote compressed tar file in the XDG cache
-# directory. Args:
-#   $1 is internal name of binary
-#   $2 is version (no leading v).
-#   $3 is location of the tar file
-#   $4 is name of project at GitHub
-#   $5 is printable name of project
-_tgz_installer() {
-  if ! [ -f "${XDG_CACHE_HOME}/dew/$1_$2" ]; then
-    log_notice "Downloading ${5:-"tarfile"} v$2"
-    tmpdir=$(mktemp -d)
-    download "$3" "${tmpdir}/$1.tgz"
-    tar -C "$tmpdir" -xf "${tmpdir}/$1.tgz"
-    mv "${tmpdir}/$4" "${XDG_CACHE_HOME}/dew/$1_$2"
-    rm -rf "$tmpdir"
-  fi
-}
-
-install_docker() {
-  xdg dew CACHE > /dev/null
-  if [ -z "$DEW_DOCKER_VERSION" ]; then
-    DEW_DOCKER_VERSION=$(version "moby/moby")
-  fi
-
-  _tgz_installer \
-    docker \
-    "$DEW_DOCKER_VERSION" \
-    "https://download.docker.com/linux/static/stable/x86_64/docker-$DEW_DOCKER_VERSION.tgz" \
-    docker/docker \
-    "Docker client"
-}
-
-install_fixuid() {
-  xdg dew CACHE > /dev/null
-  if [ -z "$DEW_FIXUID_VERSION" ]; then
-    DEW_FIXUID_VERSION=$(version "boxboat/fixuid")
-  fi
-
-  _tgz_installer \
-    fixuid \
-    "$DEW_FIXUID_VERSION" \
-    "https://github.com/boxboat/fixuid/releases/download/v${DEW_FIXUID_VERSION}/fixuid-${DEW_FIXUID_VERSION}-linux-amd64.tar.gz" \
-    fixuid \
-    fixuid
-}
 
 # Reverse order of lines (tac emulation, tac is cat in reverse)
 # shellcheck disable=SC2120  # no args==take from stdin
@@ -436,7 +258,7 @@ tac() {
 # one whenever it exists.
 query_user() {
   _qimg=$1; shift
-  uspec=$("${DEW_RUNTIME}" run --rm -v "${DEW_ROOTDIR}/prefuser.sh:/tmp/prefuser.sh:ro" --entrypoint /tmp/prefuser.sh "$_qimg" "$@")
+  uspec=$("${DEW_RUNTIME}" run --rm -v "${DEW_BINDIR}/prefuser.sh:/tmp/prefuser.sh:ro" --entrypoint /tmp/prefuser.sh "$_qimg" "$@")
   if [ -z "$uspec" ]; then
     printf 0:0\\n
   else
@@ -458,92 +280,6 @@ image_user() {
     query_user "$1" 0
   fi
 }
-
-
-# Inject a command in the current image and save the result in a new image that
-# will be used for all further operations. The command is always executed as
-# root inside the original image.
-inject() {
-  # Extract the raw (untagged) name of the image
-  img=$(printf %s\\n "$DEW_IMAGE" | sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')
-
-  # Use or create a shell script to run the command
-  if [ -f "$1" ]; then
-    tmpdir=
-    injector=$1
-  else
-    tmpdir=$(mktemp -d)
-    printf '#!/bin/sh\n' > "${tmpdir}/init.sh"
-    printf %s\\n "$1" >> "${tmpdir}/init.sh"
-    chmod a+x "${tmpdir}/init.sh"
-    injector="${tmpdir}/init.sh"
-    log_debug "Created temporary injection script: $injector"
-  fi
-  injector_args=${2:-}
-  shift 2
-
-  # Compute a shortened hash for the script to inject and its arguments, we will
-  # use them as part of the tag for the image.
-  sum_cmd=$(hash < "$injector")
-  sum_args=$(printf %s\\n "$injector_args" | hash)
-  injected_img=$(printf %s:%s%s_%s\\n "$img" "$DEW_INJECT_TAG_PREFIX" "$sum_cmd" "$sum_args")
-
-  # When we already have an injected image, don't do anything. Otherwise, run a
-  # container based on the original image with the entrypoint being the script
-  # to run. Once done, save the image and make this the image that we are going
-  # to use for further operations.
-  if ! "${DEW_RUNTIME}" image inspect "$injected_img" >/dev/null 2>&1; then
-    # Remove prior images to keep diskspace low. Iterate across all images with
-    # the same name, if any. For all that have a tag that starts with the
-    # injection prefix and have the name of the image in comment, remove them.
-    # Note that this might remove a bit too much, as it does not take the
-    # injection arguments into account.
-    if [ "$DEW_INJECT_CLEANUP" = "1" ]; then
-      log_debug "Removing dangling injected siblings..."
-      "${DEW_RUNTIME}" image ls --format '{{ .Tag }}' "$img" | while IFS= read -r tag; do
-        if printf %s\\n "$tag" | grep -qE "^$DEW_INJECT_TAG_PREFIX"; then
-          if [ "$(baseimage "${img}:${tag}")" = "$DEW_IMAGE" ] && [ "${img}:${tag}" != "$DEW_IMAGE" ]; then
-            if "${DEW_RUNTIME}" image rm -f "${img}:${tag}" >/dev/null; then
-              log_info "Removed dangling injected image ${img}:${tag}"
-            else
-              log_warn "Could not remove dangling injected image ${img}:${tag}, still having a container running?"
-            fi
-          fi
-        fi
-      done
-    fi
-
-    DEW_INJECT=$(readlink_f "$injector")
-    # Create a container, with the injection script as an entrypoint. Let it run
-    # until it exits. Once done, use the stopped container to generate a new
-    # image, then remove the (temporary) container entirely.
-    log_info "Injecting $injector $injector_args into $DEW_IMAGE, generating local image for future runs"
-    "${DEW_RUNTIME}" run \
-      -u 0 \
-      -v "$(dirname "$injector"):$(dirname "$injector"):ro" \
-      --entrypoint "$injector" \
-      --name "$DEW_NAME" \
-      "$@" \
-      -- \
-      "$DEW_IMAGE" \
-      $injector_args
-    log_debug "Run $injector $injector_args in $DEW_IMAGE, generated container $DEW_NAME"
-    "${DEW_RUNTIME}" commit \
-      --message "$(baseimage "$DEW_IMAGE")" \
-      -- \
-      "$DEW_NAME" "$injected_img" >/dev/null
-    log_debug "Generated local image $injected_img for future runs"
-    "$DEW_RUNTIME" rm --volumes "$DEW_NAME" >/dev/null
-  fi
-
-  # Replace the image for further operations and then cleanup.
-  log_info "Using injected image $injected_img instead of $DEW_IMAGE"
-  DEW_IMAGE=$injected_img
-  if [ -n "$tmpdir" ]; then
-    rm -rf "$tmpdir"
-  fi
-}
-
 
 # Start by taking care of the specical case of configuration listing first.
 if [ "$DEW_LIST" = "1" ]; then
@@ -616,13 +352,13 @@ fi
 # only do it if necessary (as it won't be in most cases).
 log_trace "Resolving selected vars"
 if printf %s\\n "$DEW_OPTS" | grep -Fq '%DEW_'; then
-  DEW_OPTS=$(printf %s\\n "$DEW_OPTS"|resolve)
+  DEW_OPTS=$(printf %s\\n "$DEW_OPTS"|resolve DEW_)
 fi
 if printf %s\\n "$DEW_INJECT" | grep -Fq '%DEW_'; then
-  DEW_INJECT=$(printf %s\\n "$DEW_INJECT"|resolve)
+  DEW_INJECT=$(printf %s\\n "$DEW_INJECT"|resolve DEW_)
 fi
 if printf %s\\n "$DEW_INJECT_ARGS" | grep -Fq '%DEW_'; then
-  DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve)
+  DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve DEW_)
 fi
 
 # Rebase (or not) image
@@ -648,7 +384,7 @@ fi
 
 # Download Docker client at the version specified by DEW_DOCKER_VERSION into the
 # XDG cache so that it can be injected into the container.
-if [ "$DEW_DOCKER" = "1" ]; then install_docker; fi
+if [ "$DEW_DOCKER" = "1" ]; then install_docker "$DEW_DOCKER_VERSION"; fi
 
 # Create files/directories prior to starting up the container. This can be used
 # to generate (empty) RC files and similar. Format is any number of
@@ -661,55 +397,7 @@ if [ "$DEW_DOCKER" = "1" ]; then install_docker; fi
 # - Name/Id of group for path
 if [ -n "$DEW_PATHS" ]; then
   for spec in $DEW_PATHS; do
-    path=$(printf %s::::::\\n "$spec" | cut -d: -f1)
-    if [ -n "$path" ]; then
-      type=$(printf %s::::::\\n "$spec" | cut -d: -f2)
-      template=$(printf %s::::::\\n "$spec" | cut -d: -f3)
-      if [ -n "$template" ]; then
-        template=$(printf %s\\n "$template"|resolve)
-      fi
-      case "$type" in
-        f | - | "")
-          if [ -n "$template" ] && [ -f "$template" ]; then
-            log_debug "Copying template $template to $path"
-            cp "$template" "$path"
-          else
-            log_debug "Creating empty file: $path"
-            touch "$path"
-          fi
-          ;;
-        d )
-          if [ -n "$template" ] && [ -d "$template" ]; then
-            log_debug "Copying template files from $template to $path"
-            mkdir -p "$path"
-            cp -a "${template%/}"/* "$path"
-          else
-            log_debug "Creating directory: $path"
-            mkdir -p "$path"
-          fi
-          ;;
-        * )
-          log_warn "$type is not a recognised path type!";;
-      esac
-
-      if [ -f "$path" ] || [ -d "$path" ]; then
-        chmod=$(printf %s::::::\\n "$spec" | cut -d: -f4)
-        if [ -n "$chmod" ]; then
-          chmod -R "$chmod" "$path"
-        fi
-        owner=$(printf %s::::::\\n "$spec" | cut -d: -f5)
-        group=$(printf %s::::::\\n "$spec" | cut -d: -f6)
-        if [ -n "$owner" ] && [ -n "$group" ]; then
-          chown -R "${owner}:${group}" "$path"
-        elif [ -n "$owner" ]; then
-          chown -R "${owner}" "$path"
-        elif [ -n "$group" ]; then
-          chgrp -R "${group}" "$path"
-        fi
-      else
-        log_error "Could not create path $path"
-      fi
-    fi
+    mkpath "$spec"
   done
 fi
 
@@ -729,13 +417,13 @@ fi
 # inside the container. We will use fixuid to map the id of the user:group that
 # exists inside the image into our values.
 if [ "$DEW_IMPERSONATE" = "minimal" ]; then
-  install_fixuid;  # Will discover DEW_FIXUID_VERSION if none specified
+  install_fixuid "$DEW_FIXUID_VERSION";  # Will discover version if none specified
   IFS=: read -r __DEW_TARGET_USER __DEW_TARGET_GROUP <<EOF
 $(image_user "$DEW_IMAGE")
 EOF
   log_debug "Target user and group: ${__DEW_TARGET_USER}:${__DEW_TARGET_GROUP}"
   inject \
-    "${DEW_ROOTDIR}/fixuid.sh" \
+    "${DEW_BINDIR}/fixuid.sh" \
     "-u $__DEW_TARGET_USER -g $__DEW_TARGET_GROUP -i /tmp/fixuid_${DEW_FIXUID_VERSION}" \
     -v "${XDG_CACHE_HOME}/dew/fixuid_${DEW_FIXUID_VERSION}:/tmp/fixuid_${DEW_FIXUID_VERSION}:ro"
 fi
@@ -897,7 +585,7 @@ else
     printf 'fixuid\n-q\n' > "$cmds"
     set -- \
           -v "${cmds}:/etc/dew.cmd:ro" \
-          -v "${DEW_ROOTDIR}/entrypoint.sh:/tmp/dew-entrypoint.sh:ro" \
+          -v "${DEW_BINDIR}/entrypoint.sh:/tmp/dew-entrypoint.sh:ro" \
           --entrypoint "/tmp/dew-entrypoint.sh" \
           "$@"
     # When we have to override the entrypoint, push it to the list of commands
@@ -916,7 +604,7 @@ else
     fi
     if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
       set -- \
-            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            -v "${DEW_BINDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
             -e DEW_UID="$(id -u)" \
             -e DEW_GID="$(id -g)" \
             -e "DEW_SHELL=$DEW_SHELL" \
@@ -928,7 +616,7 @@ else
       # Now inject sh.sh as the entrypoint, it will pick the entrypoint and the
       # command that we have just added.
       set -- \
-            -v "${DEW_ROOTDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            -v "${DEW_BINDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
             -e DEW_UID="$(id -u)" \
             -e DEW_GID="$(id -g)" \
             -e "HOME=$HOME" \
