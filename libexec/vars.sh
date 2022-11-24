@@ -46,14 +46,14 @@ value_of() {
 # stream. Do this only for "our" variables, i.e. the ones from this script.
 resolve() {
   stack_let subset
-  subset=${1:-"[A-Z_]+"}
+  subset=${1:-"[A-Z0-9_]+="}
   set --
   # Construct a set of -e sed expressions. Build these onto the only array that
   # we have, i.e. the one to carry incoming arguments.
   while IFS= read -r line; do
     # Get the name of the variable, i.e. everything in uppercase before the
     # equal sign printed out by set.
-    var=$(printf %s\\n "$line" | grep -Eo '^[A-Z_]+')
+    var=$(printf %s\\n "$line" | grep -Eo '^[A-Z0-9_]+')
     # remove the leading and ending quotes out of the value coming from set, we
     # could run through eval here, but it'll be approx as many processes (so no
     # optimisation possible)
