@@ -45,6 +45,9 @@ value_of() {
 # Resolve the value of % enclosed variables with their content in the incoming
 # stream. Do this only for "our" variables, i.e. the ones from this script.
 resolve() {
+  stack_let subset
+  subset=${1:-"[A-Z_]+"}
+  set --
   # Construct a set of -e sed expressions. Build these onto the only array that
   # we have, i.e. the one to carry incoming arguments.
   while IFS= read -r line; do
@@ -59,10 +62,11 @@ resolve() {
     # tab) so we minimise the risk of its presence in the value.
     set -- -e "s%${var}%${val}g" "$@"
   done <<EOF
-$(set | grep -E "^${1:-"[A-Z]"}")
+$(set | grep -E "^${subset}")
 EOF
   # Build the final sed command and execute it, it will perform all
   # substitutions in one go and dump them onto the stdout.
+  stack_unlet subset
   set -- sed "$@"
   exec "$@"
 }
