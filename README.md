@@ -193,21 +193,21 @@ default `python` image from the Docker hub, but as your regular user.
 
 To get a bash prompt where you can run both `npm` and `node`, run the following
 command. The entrypoint for the node image is `node`, but the default for `dew`
-when running with impersonation is to inject its own [`su.sh`](./su.sh) script
-as an entrypoint. The script will ensure a minimal HOME environment for a user
-named after yours. This is why the following command provides a bash prompt,
-rather than a `node` prompt. In that specific case, you might also notice that
-you might become the user called `node` (and not your username). This is because
-the default Docker node image already has a user at uid `1000` with the name
-`node`.
+when running with impersonation is to inject its own [`su.sh`](./bin/su.sh)
+script as an entrypoint. The script will ensure a minimal HOME environment for a
+user named after yours. This is why the following command provides a bash
+prompt, rather than a `node` prompt. In that specific case, you might also
+notice that you might become the user called `node` (and not your username).
+This is because the default Docker node image already has a user at uid `1000`
+with the name `node`.
 
 ```shell
 dew.sh node
 ```
 
 If you instead want to get an interactive `node` prompt, run the following. This
-suppresses injection of [`su.sh`](./su.sh) as described above, reverting to the
-regular behaviour.
+suppresses injection of [`su.sh`](./bin/su.sh) as described above, reverting to
+the regular behaviour.
 
 ```shell
 dew.sh -s - node
@@ -475,6 +475,21 @@ Note that in the content of this variable, any string named after one of the
 documented [variables](#variables-accessible-to-resolution), but surrounded by
 `%`, e.g. `%DEW_SHELL%`, will be replaced by the value of that variable.
 
+### `DEW_FEATURES`
+
+This variable should contain a space separated list of features that each
+container will be provided with. Features are keywords in uppercase and their
+definition comes from the file pointed at by the `DEW_FEATURES_CONFIG` variable.
+Features are the combination of one or several options and flags to the `run`
+command of `docker` or any other supported container runtime.
+
+### `DEW_FEATURES_CONFIG`
+
+This variable points to a file in `.env` format and containing the definition of
+each recognised feature that can be provided as a keyword in the `DEW_FEATURES`
+variable. The default location for this file is inside the `etc` subdirectory of
+the main repository.
+
 ## Variables Accessible to Resolution
 
 The variables accessible are all the variables starting with `DEW_` and
@@ -500,7 +515,7 @@ accurate time readings.
 Third, and most importantly, `dew` will often not directly add the `--user`
 option to the `run` subcommand, but still ensures that the process(es) is/are
 run under your user and group. To this end, `dew` injects a
-[su](./su.sh)-encapsulating script into the container and arranges for that
+[su](./bin/su.sh)-encapsulating script into the container and arranges for that
 script to be run as the entrypoint. The script will perform book-keeping
 operations such as creating a matching user and group in the "OS" of the
 container, including a home at the same location as yours. The script will also
@@ -516,18 +531,28 @@ of the filesystem tree. Some tools require more files to be accessible for
 proper operation (configuration files, etc.). In that case, you should be able
 to add necessary files through passing additional mounting options to the docker
 `run` subcommand, e.g. [kubectl](./config/kubectl.env) or
-[lazydocker](./config/lazydocker.env). The [su](su.sh)-encapsulating script
-requires a number of common Linux utilities to be present in the target
+[lazydocker](./config/lazydocker.env). The [su](./bin/su.sh)-encapsulating
+script requires a number of common Linux utilities to be present in the target
 container. When running with slimmed down images, you can make sure to provide
 such an environment through the `--rebase` option or its equivalent
 [`DEW_REBASE`](#dew_rebase) variable.
+
+It is possible to make use of the `--user` option of the `run` subcommand when
+setting the [`DEW_IMPERSONATE`](#dew_impersonate) variable to `minimal`. In that
+case, the [su](./bin/su.sh) script will not be injected.
 
 ## Requirements
 
 `dew` has minimal requirements and is implemented in pure POSIX shell for
 maximum compatibility across platforms and operating systems. `dew` only uses
 the command-line options of `sed`, `grep` etc. that available under their
-`busybox` implementation. When creating users and groups, [`su.sh`](./su.sh)
+`busybox` implementation. When creating users and groups, [`su.sh`](./bin/su.sh)
 tries to use the tools available in the base OS used by the container. Finally,
 when [rebasing](#dew_rebase) is necessary, [rebase.sh][rebase] will require `jq`
 to be installed on the host system.
+
+## History and Breaking Changes
+
+For a short time period, `dew` supported a `DEW_NETWORK` environment variable
+(and corresponding `--network` option). This has been removed in favour of the
+`DEW_FEATURES` environment variable.
