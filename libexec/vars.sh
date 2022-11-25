@@ -36,8 +36,7 @@ var_val() { sed -E -e "s/^${1:-"[A-Z_]+"}\s*=\s*//" | unquote ; }
 value_of() {
   # This forces in the exact name of the variable by performing a grep call that
   # contains both the name of the variable to look for AND the equal sign.
-  set |
-    grep -E "^${1}\s*=" |
+  grep -E "^${1}\s*=" |
     head -n 1 |
     var_val "$1"
 }
