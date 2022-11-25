@@ -5,9 +5,9 @@ module log vars
 # Create the XDG directory of type $2 for the tool named $1.
 xdg() (
   if [ -z "${1:-}" ]; then
-    d=$(value_of "XDG_${2}_${3:-HOME}")
+    d=$(set|value_of "XDG_${2}_${3:-HOME}")
   else
-    d=$(value_of "XDG_${2}_${3:-HOME}")/$1
+    d=$(set|value_of "XDG_${2}_${3:-HOME}")/$1
   fi
   if ! [ -d "$d" ]; then
     if mkdir -p "$d" 2>/dev/null; then

@@ -99,11 +99,13 @@ DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-"20.10.21"}
 # Version of the fixuid binary to download
 DEW_FIXUID_VERSION=${DEW_FIXUID_VERSION:-"0.5.1"}
 
-# (Docker) network for container. The default is to start containers inside the
-# same network as the host to make their services easily available without
-# exposing ports. If you want to export ports, change this to bridge and expose
-# the ports through DEW_OPTS.
-DEW_NETWORK=${DEW_NETWORK:-"host"}
+# List of features that all containers will have. Features are in uppercase, and
+# each feature is defined by a variable from the file pointed at by
+# $DEW_FEATURE_CONFIG
+DEW_FEATURES=${DEW_FEATURES:-"AUTORM INIT HOSTNET LOCALTIME"}
+
+# Path to file containing feature descriptions. See $DEW_FEATURES
+DEW_FEATURES_CONFIG=${DEW_FEATURES_CONFIG:-"${DEW_ROOTDIR%/}/etc/features.env"}
 
 # Installation directory inside containers where we will inject stuff, whenever
 # relevant and necessary.
@@ -172,8 +174,8 @@ parseopts \
     i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
     j,inject OPTION INJECT - "Inject this command (can be an executable script) into the original image, then run from the resulting image. This is a poorman's (Dockerfile) RUN." \
     inject-args OPTION INJECT_ARGS - "Arguments to the injection command" \
+    f,features OPTION FEATURES - "List of features given to each container, features are defined in $DEW_FEATURES_CONFIG" \
     p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
-    n,network OPTION NETWORK - "Docker network to use for container" \
     comment OPTION COMMENT - "Print out this message before running the Docker comment" \
     t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
     m,mount OPTION MOUNT - "Hierarchy levels up from current dir to mount into container, -1 to disable." \
@@ -401,7 +403,7 @@ if [ -n "$DEW_PATHS" ]; then
   done
 fi
 
-log_info "Kickstarting a transient container based on $DEW_IMAGE in network $DEW_NETWORK"
+log_info "Kickstarting a transient container based on $DEW_IMAGE"
 
 # Remember number of arguments we had after the name of the image.
 __DEW_NB_ARGS="$#"
@@ -636,12 +638,14 @@ fi
 # The base command is to arrange for the container to automatically be removed
 # once stopped, to add an init system to make sure we can capture signals and to
 # share the host network.
-set --  --rm \
-        --init \
-        --network "$DEW_NETWORK" \
-        -v /etc/localtime:/etc/localtime:ro \
-        --name "$DEW_NAME" \
-        "$@"
+for feature in $DEW_FEATURES; do
+  impl=$(value_of "$feature" < "$DEW_FEATURES_CONFIG")
+  if [ -n "$impl" ]; then
+    # shellcheck disable=SC2086 # We want word splitting!
+    set -- $impl "$@"
+  fi
+done
+set -- --name "$DEW_NAME" "$@"
 if [ "$DEW_RUNTIME" = "podman" ]; then
   set -- "$DEW_RUNTIME" run --userns=keep-id "$@"
 else
