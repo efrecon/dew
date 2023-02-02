@@ -17,7 +17,7 @@ download() {
 
 # Guess version of GH project passed as a parameter using the tags in the HTML
 # description.
-version() {
+gh_version() {
   log_debug "Guessing latest stable version for project $1"
   # This works on the HTML from GitHub as follows:
   # 1. Start from the list of tags, they point to the corresponding release.
@@ -36,8 +36,52 @@ version() {
     head -1
 }
 
+# Path to latest downloaded tool in cache, i.e. sorted by modification date.
+_latest_downloaded() {
+  find "${XDG_CACHE_HOME}/dew" -name "${1}_*" -print |
+    while IFS='
+' read -r fpath; do
+      printf '%d %s\n' "$(stat -c %Y "$fpath")" "$fpath"
+    done |
+    sort -n -k 1 -r |
+    head -1 |
+    sed -E 's/^[0-9]+ //g'
+}
+
+# $1 is the name of the tool
+# $2 is the project at github
+version() {
+  # Look for the tool on the disk
+  ondisk=$(_latest_downloaded "$1")
+  if [ -n "$ondisk" ]; then
+    # Extract the version number that its name carries.
+    ondisk_version=$(basename "$ondisk" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+$')
+    # Count the number of seconds since the binary was last modify (we will use
+    # the modification date as version check storage marker).
+    checked=$(stat -c %Y "$ondisk")
+    now=$(now)
+    elapsed=$((now - checked))
+    # Too long have elapsed? Ask GitHub about the latest version and if similar
+    # change the modification date of the binary to avoid reasking soon again.
+    if [ "$elapsed" -gt "$DEW_BINCACHE_VERCHECK" ]; then
+      version=$(gh_version "$2")
+      if [ "$ondisk_version" = "$version" ]; then
+        touch "$ondisk"
+      fi
+      printf %s\\n "$version"
+    else
+      # When binary on disk is recent, return the version that it carries.
+      printf %s\\n "$ondisk_version"
+    fi
+  else
+    # Nothing on disk? Return the version from GitHub
+    gh_version "$2"
+  fi
+}
+
+
 # Install the content of a remote compressed tar file in the XDG cache
-# directory. Args:
+# directory, if not already present. Args:
 #   $1 is internal name of binary
 #   $2 is version (no leading v).
 #   $3 is location of the tar file
@@ -50,6 +94,10 @@ tgz_installer() {
     download "$3" "${tmpdir}/$1.tgz"
     tar -C "$tmpdir" -xf "${tmpdir}/$1.tgz"
     mv "${tmpdir}/$4" "${XDG_CACHE_HOME}/dew/$1_$2"
+    # Update modification time of downloaded binary to allow for slow version
+    # check algorithm to work (it stores the time of the check as the
+    # modification date of the binary)
+    touch "${XDG_CACHE_HOME}/dew/$1_$2"
     rm -rf "$tmpdir"
   fi
 }
@@ -61,7 +109,7 @@ install_docker() {
   version=${1:-""}
   xdg dew CACHE > /dev/null
   if [ -z "$version" ]; then
-    version=$(version "moby/moby")
+    version=$(version "docker" "moby/moby")
   fi
 
   tgz_installer \
@@ -70,15 +118,17 @@ install_docker() {
     "https://download.docker.com/linux/static/stable/x86_64/docker-$version.tgz" \
     docker/docker \
     "Docker client"
+  printf %s\\n "$version"
   stack_unlet version
 }
+
 
 install_fixuid() {
   stack_let version
   version=${1:-""}
   xdg dew CACHE > /dev/null
   if [ -z "$version" ]; then
-    version=$(version "boxboat/fixuid")
+    version=$(version "fixuid" "boxboat/fixuid")
   fi
 
   tgz_installer \
@@ -87,5 +137,6 @@ install_fixuid() {
     "https://github.com/boxboat/fixuid/releases/download/v${version}/fixuid-${version}-linux-amd64.tar.gz" \
     fixuid \
     fixuid
+  printf %s\\n "$version"
   stack_unlet version
 }
