@@ -38,7 +38,7 @@ DEW_LIBPATH=${DEW_LIBPATH:-${DEW_ROOTDIR}/libexec/docker-rebase/lib/mg.sh}
 . "${DEW_LIBPATH%/}/bootstrap.sh"
 
 # Source in all relevant modules. This is where most of the "stuff" will occur.
-module log locals options text portability
+module log locals options text portability date
 
 # Arrange so we know where XDG directories are on this system.
 XDG_DATA_HOME=${XDG_DATA_HOME:-${HOME}/.local/share}
@@ -93,11 +93,15 @@ DEW_OPTS=${DEW_OPTS:-}
 # shells will be tried in turns.
 DEW_SHELL=${DEW_SHELL:-}
 
+# Number of seconds after which we should check for new versions of download
+# binaries at GitHub. Default is 3 days.
+DEW_BINCACHE_VERCHECK=${DEW_BINCACHE_VERCHECK:-"259200"}
+
 # Version of the docker client to download
-DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-"20.10.21"}
+DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-""}
 
 # Version of the fixuid binary to download
-DEW_FIXUID_VERSION=${DEW_FIXUID_VERSION:-"0.5.1"}
+DEW_FIXUID_VERSION=${DEW_FIXUID_VERSION:-""}
 
 # List of features that all containers will have. Features are in uppercase, and
 # each feature is defined by a variable from the file pointed at by
@@ -386,7 +390,9 @@ fi
 
 # Download Docker client at the version specified by DEW_DOCKER_VERSION into the
 # XDG cache so that it can be injected into the container.
-if [ "$DEW_DOCKER" = "1" ]; then install_docker "$DEW_DOCKER_VERSION"; fi
+if [ "$DEW_DOCKER" = "1" ]; then
+  DEW_DOCKER_VERSION=$(install_docker "$DEW_DOCKER_VERSION")
+fi
 
 # Create files/directories prior to starting up the container. This can be used
 # to generate (empty) RC files and similar. Format is any number of
@@ -419,7 +425,7 @@ fi
 # inside the container. We will use fixuid to map the id of the user:group that
 # exists inside the image into our values.
 if [ "$DEW_IMPERSONATE" = "minimal" ]; then
-  install_fixuid "$DEW_FIXUID_VERSION";  # Will discover version if none specified
+  DEW_FIXUID_VERSION=$(install_fixuid "$DEW_FIXUID_VERSION");
   IFS=: read -r __DEW_TARGET_USER __DEW_TARGET_GROUP <<EOF
 $(image_user "$DEW_IMAGE")
 EOF
