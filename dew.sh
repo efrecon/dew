@@ -199,7 +199,7 @@ fi
 
 # Read our internal modules, not all independent
 MG_LIBPATH=${DEW_ROOTDIR}/libexec:${MG_LIBPATH}
-module installer xdg vars inject mkpath
+module installer xdg vars inject mkpath user
 
 # Directory where internal scripts are stored and used when setting up
 # containers.
@@ -257,34 +257,6 @@ wrap() {
 # shellcheck disable=SC2120  # no args==take from stdin
 tac() {
   awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' "$@"
-}
-
-# Query image for the user:group to be used. This will peek into the
-# /etc/password file to discover if a used is created in the image and pick that
-# one whenever it exists.
-query_user() {
-  _qimg=$1; shift
-  uspec=$("${DEW_RUNTIME}" run --rm -v "${DEW_BINDIR}/prefuser.sh:/tmp/prefuser.sh:ro" --entrypoint /tmp/prefuser.sh "$_qimg" "$@")
-  if [ -z "$uspec" ]; then
-    printf 0:0\\n
-  else
-    printf %s\\n "$uspec"
-  fi
-}
-
-# Return user:group to use with the passed as a parameter. This is able to guess
-# a good user out of the ones created inside the image.
-image_user() {
-  img_user=$("${DEW_RUNTIME}" image inspect --format '{{ .Config.User }}' "$1")
-  if printf %s\\n "$img_user" | grep -qF ':'; then
-    printf %s\\n "$img_user"
-  elif [ -z "$img_user" ]; then
-    query_user "$1"
-  elif [ "$img_user" = "0" ]; then
-    query_user "$1"
-  else
-    query_user "$1" 0
-  fi
 }
 
 # Start by taking care of the specical case of configuration listing first.
@@ -366,6 +338,7 @@ fi
 if printf %s\\n "$DEW_INJECT_ARGS" | grep -Fq '%DEW_'; then
   DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve DEW_)
 fi
+log_trace "Resolved selected vars"
 
 # Rebase (or not) image
 if [ -n "$DEW_REBASE" ]; then
