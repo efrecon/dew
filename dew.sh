@@ -159,6 +159,13 @@ DEW_INJECT_ARGS=${DEW_INJECT_ARGS:-""}
 # Root GitHub home page
 DEW_GITHUB=${DEW_GITHUB:-"https://github.com/"}
 
+# Namespace under which to root target Dockerfiles. This should be compatible
+# with what Docker uses, but not a proper Docker registry.
+DEW_NAMESPACE=${DEW_NAMESPACE:-"github.com/efrecon/dew"}
+
+# The number of significant digits to pick from sha256 sum for the digest.
+DEW_DIGEST=${DEW_DIGEST:-7}
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -224,6 +231,24 @@ config() {
             return
           else
             log_error "Configuration file at $f contains more than dew-specific configuration"
+          fi
+        fi
+      done
+    fi
+  done
+}
+
+dockerfile() {
+  for d in $(printf %s\\n "$DEW_CONFIG_PATH" | awk '{split($1,DIRS,/:/); for ( D in DIRS ) {printf "%s\n", DIRS[D];} }'); do
+    log_trace "Looking for $1 in $d"
+    if [ -d "$d" ]; then
+      for f in "${d}/${1}.Dockerfile" "${d}/Dockerfile.${1}" "${d}/${1}.df" ; do
+        if [ -f "$f" ]; then
+          if grep -q '^FROM' "$f"; then
+            printf %s\\n "$f"
+            return
+          else
+            log_error "File at $f does not seem to be a Dockerfile"
           fi
         fi
       done
@@ -309,8 +334,34 @@ bn=$(basename "$(printf %s\\n "$1" |
 DEW_IMAGE=$1
 shift; # Jump to the arguments
 
+# Build Docker image, if relevant and collect configuration for name of image
+# passed as $1 earlier. We do this in one sweep to be able to override a
+# Dockerfile with some dew-specific configuration. This is unlikely to be
+# necessary, but maybe of interest anyhow.
+DEW_DOCKERFILE=$(dockerfile "$DEW_IMAGE")
+if [ -n "$DEW_DOCKERFILE" ]; then
+  # Compare digest of dockerfile against digest stored in resulting image and
+  # (re-)build if necessary. When building, store the current digest of the
+  # Dockerfile.
+  digest=$(sha256sum "$DEW_DOCKERFILE"|cut -c "1-$DEW_DIGEST")
+  img_digest=$("$DEW_RUNTIME" image inspect --format "{{index .Config.Labels \"${DEW_NAMESPACE%/}/digest\"}}" "${DEW_NAMESPACE%/}/$DEW_IMAGE" || true)
+  if ! [ "$digest" = "$img_digest" ]; then
+    "$DEW_RUNTIME" image build \
+      --file "$DEW_DOCKERFILE" \
+      --label "${DEW_NAMESPACE%/}/source=$DEW_DOCKERFILE" \
+      --label "${DEW_NAMESPACE%/}/name=$DEW_IMAGE" \
+      --label "${DEW_NAMESPACE%/}/digest=$digest" \
+      --tag "${DEW_NAMESPACE%/}/$DEW_IMAGE" \
+      "$(dirname "$DEW_DOCKERFILE")"
+  fi
+  DEW_CONFIG=$(config "$DEW_IMAGE")
+  DEW_IMAGE="${DEW_NAMESPACE%/}/$DEW_IMAGE"
+else
+  DEW_CONFIG=$(config "$DEW_IMAGE")
+fi
+
+
 # Read configuration file for the first parameter
-DEW_CONFIG=$(config "$DEW_IMAGE")
 DEW_CONFIGDIR=
 if [ -n "$DEW_CONFIG" ]; then
   log_info "Reading configuration for $DEW_IMAGE from $DEW_CONFIG"
