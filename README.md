@@ -273,6 +273,21 @@ configuration path), followed by arguments that will be passed to the Docker
 container at its creation (the `COMMAND` from a Dockerfile). Pass the option
 `--help` to get a list of known options.
 
+Provided the first argument after the (optional) `--` is `XXX`, it will be
+understood as follows:
+
+- If a file called `Dockerfile.XXX`, or `XXX.Dockerfile`, or `XXX.df` is found
+  under the configuration path `DEW_CONFIG_PATH`, that file will be used to
+  build a local Docker image called `github.com/efrecon/dew/XXX` -- the prefix
+  is actually controlled by `DEW_NAMESPACE`. `dew` will rebuild a new image only
+  whenever a change has been detected on the Dockerfile.
+- If a file called `XXX` or `XXX.env` is found under the configuration path
+  `DEW_CONFIG_PATH`, that file will be used to set any of the environment
+  variables described below. Note that it is possible to combine this behaviour
+  with the Dockerfile behaviour above.
+- If none of the above was true, `XXX` is understood as the name of a local or
+  remote Docker image.
+
 ## Environment Variables
 
 `dew` can also be configured using environment variables, these start with
@@ -285,8 +300,7 @@ under the configuration path.
 
 This variable is a colon separated list of directories where `dew` will look for
 environment configuration files, i.e. files which basename matches the first
-command-line argument after all the options. `dew` will look for files without
-an extension, or the extension `.env`, in that order. The default for the
+command-line argument after all the options, or Dockerfiles. The default for the
 configuration path is the directory `dew` under `$XDG_CONFIG_HOME`, followed by
 the `config` directory under this repository. When `XDG_CONFIG_HOME` does not
 exist, it defaults to `$HOME/.config`.
