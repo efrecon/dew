@@ -163,8 +163,8 @@ DEW_GITHUB=${DEW_GITHUB:-"https://github.com/"}
 # with what Docker uses, but not a proper Docker registry.
 DEW_NAMESPACE=${DEW_NAMESPACE:-"github.com/efrecon/dew"}
 
-# The number of significant digits to pick from sha256 sum for the digest.
-DEW_DIGEST=${DEW_DIGEST:-7}
+# The number of significant digits to pick from sha256 sum for the digests.
+DEW_DIGEST=${DEW_DIGEST:-12}
 
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
@@ -206,7 +206,7 @@ fi
 
 # Read our internal modules, not all independent
 MG_LIBPATH=${DEW_ROOTDIR}/libexec:${MG_LIBPATH}
-module installer xdg vars inject mkpath user
+module utils installer xdg vars inject mkpath user
 
 # Directory where internal scripts are stored and used when setting up
 # containers.
@@ -278,11 +278,6 @@ wrap() {
 }
 
 
-# Reverse order of lines (tac emulation, tac is cat in reverse)
-# shellcheck disable=SC2120  # no args==take from stdin
-tac() {
-  awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' "$@"
-}
 
 # Start by taking care of the specical case of configuration listing first.
 if [ "$DEW_LIST" = "1" ]; then
@@ -343,7 +338,7 @@ if [ -n "$DEW_DOCKERFILE" ]; then
   # Compare digest of dockerfile against digest stored in resulting image and
   # (re-)build if necessary. When building, store the current digest of the
   # Dockerfile.
-  digest=$(sha256sum "$DEW_DOCKERFILE"|cut -c "1-$DEW_DIGEST")
+  digest=$(digest < "$DEW_DOCKERFILE")
   img_digest=$("$DEW_RUNTIME" image inspect --format "{{index .Config.Labels \"${DEW_NAMESPACE%/}/digest\"}}" "${DEW_NAMESPACE%/}/$DEW_IMAGE" || true)
   if ! [ "$digest" = "$img_digest" ]; then
     "$DEW_RUNTIME" image build \

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-module log
+module log utils
 
 
 # Is image passed as a parameter an injected image
@@ -15,11 +15,6 @@ baseimage() {
   else
     printf %s\\n "$1"
   fi
-}
-
-# shellcheck disable=SC2120 # We are fine with the default in this script!
-hash() {
-  sha256sum | grep -Eo '[0-9a-f]+' | cut -c -"${1:-"12"}"
 }
 
 
@@ -47,8 +42,8 @@ inject() {
 
   # Compute a shortened hash for the script to inject and its arguments, we will
   # use them as part of the tag for the image.
-  sum_cmd=$(hash < "$injector")
-  sum_args=$(printf %s\\n "$injector_args" | hash)
+  sum_cmd=$(digest < "$injector")
+  sum_args=$(printf %s\\n "$injector_args" | digest)
   injected_img=$(printf %s:%s%s_%s\\n "$img" "$DEW_INJECT_TAG_PREFIX" "$sum_cmd" "$sum_args")
 
   # When we already have an injected image, don't do anything. Otherwise, run a
