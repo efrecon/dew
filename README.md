@@ -397,7 +397,10 @@ following possible shells in the container, in that order: `bash`, `ash`, `sh`.
 
 This variable is the version of the Docker client to download and inject in the
 container when running with the `-d` (`--docker`) command-line option, or when
-the [`DEW_DOCKER`](#dew_docker) variable is set to `1`.
+the [`DEW_DOCKER`](#dew_docker) variable is set to `1`. When empty, the default,
+the latest version of the Docker client will be downloaded. Check for new
+versions only happen every [`DEW_BINCACHE_VERCHECK`](#dew_bincache_vercheck)
+seconds.
 
 ### `DEW_INSTALLDIR`
 
@@ -503,6 +506,18 @@ This variable points to a file in `.env` format and containing the definition of
 each recognised feature that can be provided as a keyword in the `DEW_FEATURES`
 variable. The default location for this file is inside the `etc` subdirectory of
 the main repository.
+
+### `DEW_BINCACHE_VERCHECK`
+
+When versions of binary dependencies are checked, i.e. whenever the specified
+versions for these binaries are empty, `dew` will only check if a new version is
+available every `DEW_BINCACHE_VERCHECK` seconds. The default is 3 days.
+
+### `DEW_BINCACHE_EXPIRE`
+
+`dew` keeps versions of binary dependencies in the XDG cache.
+`DEW_BINCACHE_EXPIRE` is the number of seconds after which old binaries are
+evicted from the cache. The default is 41 days.
 
 ## Variables Accessible to Resolution
 

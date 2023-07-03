@@ -48,9 +48,37 @@ _latest_downloaded() {
     sed -E 's/^[0-9]+ //g'
 }
 
+# Remove obsolete binaries from cache. Args: $1 is the name of the tool, e.g.
+# docker
+_rm_obsolete() {
+  stack_let now
+  stack_let touched
+  stack_let elapsed
+
+  if [ -n "$DEW_BINCACHE_EXPIRE" ] && [ "$DEW_BINCACHE_EXPIRE" -gt "0" ]; then
+    now=$(date +%s)
+    find "${XDG_CACHE_HOME}/dew" -name "${1}_*" -print |
+      while IFS='
+' read -r fpath; do
+        touched=$(stat -c %Y "$fpath")
+        elapsed=$((now - touched))
+        if [ "$elapsed" -gt "$DEW_BINCACHE_EXPIRE" ]; then
+          log_notice "Removing obsolete cached binary $fpath"
+          rm -f "$fpath"
+        fi
+      done
+  fi
+  stack_unlet now touched elapsed
+}
+
 # $1 is the name of the tool
 # $2 is the project at github
 version() {
+  stack_let ondisk
+  stack_let ondisk_version
+  stack_let checked
+  stack_let now
+  stack_let elapsed
   # Look for the tool on the disk
   ondisk=$(_latest_downloaded "$1")
   if [ -n "$ondisk" ]; then
@@ -77,6 +105,8 @@ version() {
     # Nothing on disk? Return the version from GitHub
     gh_version "$2"
   fi
+
+  stack_unlet ondisk ondisk_version checked now elapsed
 }
 
 
@@ -110,6 +140,8 @@ install_docker() {
   xdg dew CACHE > /dev/null
   if [ -z "$version" ]; then
     version=$(version "docker" "moby/moby")
+    # Remove obsolete binaries from cache
+    _rm_obsolete "docker"
   fi
 
   tgz_installer \
@@ -129,6 +161,8 @@ install_fixuid() {
   xdg dew CACHE > /dev/null
   if [ -z "$version" ]; then
     version=$(version "fixuid" "boxboat/fixuid")
+    # Remove obsolete binaries from cache
+    _rm_obsolete "fixuid"
   fi
 
   tgz_installer \
