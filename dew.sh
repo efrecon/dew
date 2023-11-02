@@ -97,6 +97,9 @@ DEW_SHELL=${DEW_SHELL:-}
 # binaries at GitHub. Default is 3 days.
 DEW_BINCACHE_VERCHECK=${DEW_BINCACHE_VERCHECK:-"259200"}
 
+# Number of seconds to evict old binaries from cache. Default is 41 days.
+DEW_BINCACHE_EXPIRE=${DEW_BINCACHE_EXPIRE:-"3542400"}
+
 # Version of the docker client to download
 DEW_DOCKER_VERSION=${DEW_DOCKER_VERSION:-""}
 
