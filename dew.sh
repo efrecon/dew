@@ -171,6 +171,8 @@ DEW_DIGEST=${DEW_DIGEST:-12}
 
 if [ -L "$0" ]; then
   if ! printf %s\\n "$(basename "$0")" | grep -qE '^dew'; then
+    # Default to an image name based on the name of the symlink, and forces help
+    # and logging to keep using dew 
     DEW_IMAGE=$(basename "$0")
     MG_CMDNAME=dew.sh
     # shellcheck disable=SC2034 # Var is used by logging
