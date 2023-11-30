@@ -169,6 +169,15 @@ DEW_NAMESPACE=${DEW_NAMESPACE:-"github.com/efrecon/dew"}
 # The number of significant digits to pick from sha256 sum for the digests.
 DEW_DIGEST=${DEW_DIGEST:-12}
 
+if [ -L "$0" ]; then
+  if ! printf %s\\n "$(basename "$0")" | grep -qE '^dew'; then
+    DEW_IMAGE=$(basename "$0")
+    MG_CMDNAME=dew.sh
+    # shellcheck disable=SC2034 # Var is used by logging
+    MG_APPNAME=dew
+  fi
+fi
+
 _OPTS=;   # Will contain list of vars set through the options
 parseopts \
   --main \
@@ -199,13 +208,12 @@ parseopts \
 
 # shellcheck disable=SC2154  # Var is set by parseopts
 shift "$_begin"
+if [ -n "${DEW_IMAGE:-}" ]; then
+  log_debug "$0 is a symlink, defaulting image name to ${DEW_IMAGE}"
+fi
 
 # Store all our vars
 _ENV=$(set | grep -E '^(DEW_|MG_)')
-
-if [ "$#" = 0 ] && [ "$DEW_LIST" = "0" ]; then
-  die "You must at least provide the name of an image"
-fi
 
 # Read our internal modules, not all independent
 MG_LIBPATH=${DEW_ROOTDIR}/libexec:${MG_LIBPATH}
@@ -323,14 +331,21 @@ if [ -z "$DEW_RUNTIME" ]; then
   fi
 fi
 
+if [ -z "${DEW_IMAGE:-}" ]; then
+  if [ "$#" = "0" ]; then
+    die "No image specified"
+  else
+    DEW_IMAGE="$1"
+    shift; # Jump to the arguments
+  fi
+fi
+
 # Cut out the possible tag/sha256 at the end of the image name and extract the
 # main name to be used as part of the automatically generated container name.
 # ^((((((?!-))(xn--|_{1,1})?[a-z0-9-]{0,61}[a-z0-9]{1,1}\.)*(xn--)?([a-z0-9][a-z0-9\-]{0,60}|[a-z0-9-]{1,30}\.[a-z]{2,}))(((:[0-9]+)?)\/?))?)([a-z0-9](\-*[a-z0-9])*(\/[a-z0-9](\-*[a-z0-9])*)*)((:([a-z0-9\_]([\-\.\_a-z0-9])*))|(@sha256:[a-f0-9]{64}))?$
-bn=$(basename "$(printf %s\\n "$1" |
+bn=$(basename "$(printf %s\\n "$DEW_IMAGE" |
                  sed -E 's~((:([a-z0-9_.-]+))|(@sha256:[a-f0-9]{64}))?$~~')")
 [ -z "$DEW_NAME" ] && DEW_NAME="dew_${bn}_$$"
-DEW_IMAGE=$1
-shift; # Jump to the arguments
 
 # Build Docker image, if relevant and collect configuration for name of image
 # passed as $1 earlier. We do this in one sweep to be able to override a
