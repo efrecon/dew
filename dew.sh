@@ -181,37 +181,38 @@ if [ -L "$0" ]; then
 fi
 
 _OPTS=;   # Will contain list of vars set through the options
-parseopts \
-  --main \
-  --synopsis "Kick-start a Docker-based environment from the current directory" \
-  --usage "$MG_CMDNAME [options] -- image args..." \
-  --description "The name of a docker image is a mandatory argument. When only a name is passed, the best possible interactive shell will be provided." \
-  --prefix "DEW" \
-  --shift _begin \
-  --vars _OPTS \
-  --options \
-    r,root FLAG,INVERT IMPERSONATE - "Do not impersonate user in container" \
-    d,docker FLAG DOCKER - "Inject Docker client into container" \
-    o,opts,options OPTION OPTS - "Options blindly passed to docker run" \
-    s,shell OPTION SHELL - "Shell to run interactively, default is empty, meaning a good guess. Set to - to leave the entrypoint unchanged." \
-    rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
-    xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
-    i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
-    j,inject OPTION INJECT - "Inject this command (can be an executable script) into the original image, then run from the resulting image. This is a poorman's (Dockerfile) RUN." \
-    inject-args OPTION INJECT_ARGS - "Arguments to the injection command" \
-    f,features OPTION FEATURES - "List of features given to each container, features are defined in $DEW_FEATURES_CONFIG" \
-    p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
-    comment OPTION COMMENT - "Print out this message before running the Docker comment" \
-    t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
-    m,mount OPTION MOUNT - "Hierarchy levels up from current dir to mount into container, -1 to disable." \
-    l,list FLAG LIST - "Print out list of known configs and exit" \
-    h,help FLAG @HELP - "Print this help and exit" \
-  -- "$@"
-
-# shellcheck disable=SC2154  # Var is set by parseopts
-shift "$_begin"
 if [ -n "${DEW_IMAGE:-}" ]; then
-  log_debug "$0 is a symlink, defaulting image name to ${DEW_IMAGE}"
+  log_notice "$0 is a symlink, defaulting image name to ${DEW_IMAGE} and passing all arguments to it"
+else
+  parseopts \
+    --main \
+    --synopsis "Kick-start a Docker-based environment from the current directory" \
+    --usage "$MG_CMDNAME [options] -- image args..." \
+    --description "The name of a docker image is a mandatory argument. When only a name is passed, the best possible interactive shell will be provided." \
+    --prefix "DEW" \
+    --shift _begin \
+    --vars _OPTS \
+    --options \
+      r,root FLAG,INVERT IMPERSONATE - "Do not impersonate user in container" \
+      d,docker FLAG DOCKER - "Inject Docker client into container" \
+      o,opts,options OPTION OPTS - "Options blindly passed to docker run" \
+      s,shell OPTION SHELL - "Shell to run interactively, default is empty, meaning a good guess. Set to - to leave the entrypoint unchanged." \
+      rebase OPTION REBASE - "Rebase image on top of this one before running it (a copy will be made). Can be handy to inject a shell and other utilities in barebone images." \
+      xdg OPTION XDG - "Create, then mount XDG directories with that name as the basename into container" \
+      i,interactive OPTION INTERACTIVE - "Provide (a positive boolean), do not provide (a negative boolean) or guess (when auto) for interaction with -it run option" \
+      j,inject OPTION INJECT - "Inject this command (can be an executable script) into the original image, then run from the resulting image. This is a poorman's (Dockerfile) RUN." \
+      inject-args OPTION INJECT_ARGS - "Arguments to the injection command" \
+      f,features OPTION FEATURES - "List of features given to each container, features are defined in $DEW_FEATURES_CONFIG" \
+      p,path,paths OPTION PATHS - "Space-separated list of colon-separated path specifications to enforce presence/access of files/directories" \
+      comment OPTION COMMENT - "Print out this message before running the Docker comment" \
+      t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
+      m,mount OPTION MOUNT - "Hierarchy levels up from current dir to mount into container, -1 to disable." \
+      l,list FLAG LIST - "Print out list of known configs and exit" \
+      h,help FLAG @HELP - "Print this help and exit" \
+    -- "$@"
+
+  # shellcheck disable=SC2154  # Var is set by parseopts
+  shift "$_begin"
 fi
 
 # Store all our vars

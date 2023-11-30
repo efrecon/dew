@@ -41,7 +41,9 @@ option.
 
 When `$0` -- the main progam -- is a symbolic link to `dew`, `dew` will
 automatically use the basename of the link as the name of the configuration to
-look for.
+look for. It will not parse **any** argument, instead all arguments are passed
+to the Docker image specified by the configuration that it finds. You *can* use
+the environment variables starting with `DEW_` if you want to alter options.
 
   [lope]: https://github.com/Crazybus/lope
 
