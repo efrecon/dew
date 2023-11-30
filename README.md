@@ -39,6 +39,10 @@ the current directory called `.dew.d`, in a sub-directory of the
 this repository. To get a list of known configurations, run `dew` with the `-l`
 option.
 
+When `$0` -- the main progam -- is a symbolic link to `dew`, `dew` will
+automatically use the basename of the link as the name of the configuration to
+look for.
+
   [lope]: https://github.com/Crazybus/lope
 
 **Note**: This project uses git [submodules], use one of the two commands to
