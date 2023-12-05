@@ -33,6 +33,7 @@ gh_version() {
     awk -F'[/\"]' '{print $7}' |
     sed 's/^v//g' |
     grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' |
+    sort -r |
     head -1
 }
 
