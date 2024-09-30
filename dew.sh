@@ -324,6 +324,19 @@ fi
 if [ -z "$DEW_RUNTIME" ]; then
   for r in $DEW_RUNTIMES; do
     if command -v "$r" >/dev/null 2>&1; then
+      # Sort out if docker really is podman, since some distros (Fedora) have a
+      # package to emulate docker with podman.
+      if [ "$r" = "docker" ]; then
+        if [ "$(stat -c %s "$(command -v "$r")")" -lt 32768 ]; then
+          if strings "$(command -v "$r")" | grep -qF 'podman'; then
+            if command -v "podman" >/dev/null 2>&1; then
+              DEW_RUNTIME=podman
+              log_debug "docker probably emulated by podman, so using $DEW_RUNTIME as runtime"
+              break
+            fi
+          fi
+        fi
+      fi
       DEW_RUNTIME=$r
       log_debug "Using $DEW_RUNTIME as runtime"
       break
@@ -473,7 +486,7 @@ EOF
   inject \
     "${DEW_BINDIR}/fixuid.sh" \
     "-u $__DEW_TARGET_USER -g $__DEW_TARGET_GROUP -i /tmp/fixuid_${DEW_FIXUID_VERSION}" \
-    -v "${XDG_CACHE_HOME}/dew/fixuid_${DEW_FIXUID_VERSION}:/tmp/fixuid_${DEW_FIXUID_VERSION}:ro"
+    -v "$(bindmount "${XDG_CACHE_HOME}/dew/fixuid_${DEW_FIXUID_VERSION}" "/tmp/fixuid_${DEW_FIXUID_VERSION}" ro)"
 fi
 
 # Arrange for __DEW_TARGET_USER to be the name or id of the target default user
@@ -527,8 +540,19 @@ fi
 # case, the user remapped into the container will also have access to the Docker
 # socket (you still have provide a CLI through injecting the Docker client with
 # -d)
+if [ "$DEW_RUNTIME" = "podman" ]; then
+  if printf %s\\n "$DEW_SOCK" | grep -qF docker.sock; then
+    if printf %s\\n "${DOCKER_HOST:-}" | grep -qF podman.sock; then
+      DEW_SOCK=$(printf %s\\n "$DOCKER_HOST"|sed s~^unix://~~)
+      if ! [ -S "$DEW_SOCK" ]; then
+        log_warn "$DEW_SOCK is not a socket file!"
+        DEW_SOCK=
+      fi
+    fi
+  fi
+fi
 if [ -n "$DEW_SOCK" ]; then
-  set -- -v "${DEW_SOCK}:${DEW_SOCK}" "$@"
+  set -- -v "$(bindmount "${DEW_SOCK}")" "$@"
 fi
 
 # Create and mount XDG directories. We don't only create XDG directories when
@@ -539,14 +563,14 @@ fi
 if [ -n "$DEW_XDG" ]; then
   for type in DATA STATE CONFIG CACHE; do
     d=$(xdg "$DEW_XDG" "$type")
-    set -- -v "${d}:${d}" "$@"
+    set -- -v "$(bindmount "$d")" "$@"
     export XDG_${type}_HOME
   done
 
   d=$(xdg "" RUNTIME DIR 1)
   export XDG_RUNTIME_DIR
   chmod 0700 "$d"
-  set -- -v "${d}:${d}" "$@"
+  set -- -v "$(bindmount "$d")" "$@"
 fi
 
 # Automatically mount the current directory and make it the current directory
@@ -561,7 +585,7 @@ if [ "$DEW_MOUNT" -ge "0" ]; then
   done
 
   set -- \
-        -v "${mntdir}:${mntdir}" \
+        -v "$(bindmount "$mntdir")" \
         -w "$(pwd)" \
         "$@"
 fi
@@ -584,7 +608,7 @@ fi
 # the prompt (or other programs).
 if [ "$DEW_DOCKER" = "1" ]; then
   if [ -f "${XDG_CACHE_HOME}/dew/docker_$DEW_DOCKER_VERSION" ]; then
-    set -- -v "${XDG_CACHE_HOME}/dew/docker_${DEW_DOCKER_VERSION}:${DEW_INSTALLDIR%/}/docker:ro" "$@"
+    set -- -v "$(bindmount "${XDG_CACHE_HOME}/dew/docker_${DEW_DOCKER_VERSION}" "${DEW_INSTALLDIR%/}/docker" "ro")" "$@"
   fi
 fi
 
@@ -632,8 +656,8 @@ else
     cmds=$(mktemp -t "dew_XXXXXX")
     printf 'fixuid\n-q\n' > "$cmds"
     set -- \
-          -v "${cmds}:/etc/dew.cmd:ro" \
-          -v "${DEW_BINDIR}/entrypoint.sh:/tmp/dew-entrypoint.sh:ro" \
+          -v "$(bindmount "${cmds}" /etc/dew.cmd ro)" \
+          -v "$(bindmount "${DEW_BINDIR}/entrypoint.sh" /tmp/dew-entrypoint.sh ro)" \
           --entrypoint "/tmp/dew-entrypoint.sh" \
           "$@"
     # When we have to override the entrypoint, push it to the list of commands
@@ -652,7 +676,7 @@ else
     fi
     if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
       set -- \
-            -v "${DEW_BINDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            -v "$(bindmount "${DEW_BINDIR}/su.sh" "${DEW_INSTALLDIR%/}/su.sh" ro)" \
             -e DEW_UID="$(id -u)" \
             -e DEW_GID="$(id -g)" \
             -e "DEW_SHELL=$DEW_SHELL" \
@@ -664,7 +688,7 @@ else
       # Now inject sh.sh as the entrypoint, it will pick the entrypoint and the
       # command that we have just added.
       set -- \
-            -v "${DEW_BINDIR}/su.sh:${DEW_INSTALLDIR%/}/su.sh:ro" \
+            -v "$(bindmount "${DEW_BINDIR}/su.sh" "${DEW_INSTALLDIR%/}/su.sh" ro)" \
             -e DEW_UID="$(id -u)" \
             -e DEW_GID="$(id -g)" \
             -e "HOME=$HOME" \

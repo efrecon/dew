@@ -5,7 +5,7 @@
 # one whenever it exists.
 _query_user() {
   _qimg=$1; shift
-  uspec=$("${DEW_RUNTIME}" run --rm -v "${DEW_BINDIR}/prefuser.sh:/tmp/prefuser.sh:ro" --entrypoint /tmp/prefuser.sh "$_qimg" "$@")
+  uspec=$("${DEW_RUNTIME}" run --rm -v "$(bindmount "${DEW_BINDIR}/prefuser.sh" "/tmp/prefuser.sh" ro)" --entrypoint /tmp/prefuser.sh "$_qimg" "$@")
   if [ -z "$uspec" ]; then
     printf 0:0\\n
   else

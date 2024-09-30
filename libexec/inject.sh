@@ -78,7 +78,7 @@ inject() {
     log_info "Injecting $injector $injector_args into $DEW_IMAGE, generating local image for future runs"
     "${DEW_RUNTIME}" run \
       -u 0 \
-      -v "$(dirname "$injector"):$(dirname "$injector"):ro" \
+      -v "$(bindmount "$(dirname "$injector")" "" ro)" \
       --entrypoint "$injector" \
       --name "$DEW_NAME" \
       "$@" \
@@ -86,10 +86,18 @@ inject() {
       "$DEW_IMAGE" \
       $injector_args
     log_debug "Run $injector $injector_args in $DEW_IMAGE, generated container $DEW_NAME"
-    "${DEW_RUNTIME}" commit \
-      --message "$(baseimage "$DEW_IMAGE")" \
-      -- \
-      "$DEW_NAME" "$injected_img" >/dev/null
+    if [ "$DEW_RUNTIME" = "podman" ]; then
+      "${DEW_RUNTIME}" commit \
+        --message "$(baseimage "$DEW_IMAGE")" \
+        --format "docker" \
+        -- \
+        "$DEW_NAME" "$injected_img" >/dev/null
+    else
+      "${DEW_RUNTIME}" commit \
+        --message "$(baseimage "$DEW_IMAGE")" \
+        -- \
+        "$DEW_NAME" "$injected_img" >/dev/null
+    fi
     log_debug "Generated local image $injected_img for future runs"
     "$DEW_RUNTIME" rm --volumes "$DEW_NAME" >/dev/null
   fi
