@@ -623,19 +623,34 @@ fi
 
 if [ "$DEW_RUNTIME" = "podman" ]; then
   if [ "$DEW_IMPERSONATE" = "1" ]; then
+    # We will become root to be able to run su.sh and then become "ourselves"
+    # inside the container.
+    if [ "$__DEW_TARGET_USER" != "0" ]; then
+      set -- -u "root" "$@"
+    fi
     if [ "$MG_VERBOSITY" = "trace" ]; then
       set -- -e "DEW_DEBUG=1" "$@"
     fi
     if [ -n "$DEW_SHELL" ] && [ "$DEW_SHELL" != "-" ]; then
       set -- \
+            -v "$(bindmount "${DEW_BINDIR}/su.sh" "${DEW_INSTALLDIR%/}/su.sh" ro)" \
+            -e DEW_UID="$(id -u)" \
+            -e DEW_GID="$(id -g)" \
+            -e "DEW_SHELL=$DEW_SHELL" \
             -e "HOME=$HOME" \
             -e "USER=$USER" \
-            --entrypoint "$DEW_SHELL" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
             "$@"
     else
+      # Now inject sh.sh as the entrypoint, it will pick the entrypoint and the
+      # command that we have just added.
       set -- \
+            -v "$(bindmount "${DEW_BINDIR}/su.sh" "${DEW_INSTALLDIR%/}/su.sh" ro)" \
+            -e DEW_UID="$(id -u)" \
+            -e DEW_GID="$(id -g)" \
             -e "HOME=$HOME" \
             -e "USER=$USER" \
+            --entrypoint "${DEW_INSTALLDIR%/}/su.sh" \
             "$@"
     fi
   else
