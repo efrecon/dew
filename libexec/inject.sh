@@ -71,7 +71,9 @@ inject() {
       done
     fi
 
+    # shellcheck disable=SC2034 # Used by main script
     DEW_INJECT=$(readlink_f "$injector")
+
     # Create a container, with the injection script as an entrypoint. Let it run
     # until it exits. Once done, use the stopped container to generate a new
     # image, then remove the (temporary) container entirely.
