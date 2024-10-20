@@ -86,6 +86,11 @@ DEW_XDG=${DEW_XDG:-}
 # impersonate the user to arrange for file permissions to be right.
 DEW_MOUNT=${DEW_MOUNT:-0}
 
+# Space separated list of bindmounts options, these translate as the format of
+# the -v option of the docker client. When the target directory is missing or
+# empty, it will equal the source.
+DEW_MOUNTS=${DEW_MOUNTS:-""}
+
 # Additional options blindly passed to the docker run command.
 DEW_OPTS=${DEW_OPTS:-}
 
@@ -172,7 +177,7 @@ DEW_DIGEST=${DEW_DIGEST:-12}
 if [ -L "$0" ]; then
   if ! printf %s\\n "$(basename "$0")" | grep -qE '^dew'; then
     # Default to an image name based on the name of the symlink, and forces help
-    # and logging to keep using dew 
+    # and logging to keep using dew
     DEW_IMAGE=$(basename "$0")
     MG_CMDNAME=dew.sh
     # shellcheck disable=SC2034 # Var is used by logging
@@ -207,6 +212,7 @@ else
       comment OPTION COMMENT - "Print out this message before running the Docker comment" \
       t,runtime OPTION RUNTIME - "Runtime to use, when empty, pick first from $DEW_RUNTIMES" \
       m,mount OPTION MOUNT - "Hierarchy levels up from current dir to mount into container, -1 to disable." \
+      mounts OPTION MOUNTS - "Space separated of bindmouts, e.g. -v docker option. Target directory can be ignored." \
       l,list FLAG LIST - "Print out list of known configs and exit" \
       h,help FLAG @HELP - "Print this help and exit" \
     -- "$@"
@@ -418,6 +424,9 @@ fi
 if printf %s\\n "$DEW_INJECT_ARGS" | grep -Fq '%DEW_'; then
   DEW_INJECT_ARGS=$(printf %s\\n "$DEW_INJECT_ARGS"|resolve DEW_)
 fi
+if printf %s\\n "$DEW_MOUNTS" | grep -Fq '%DEW_'; then
+  DEW_MOUNTS=$(printf %s\\n "$DEW_MOUNTS"|resolve DEW_)
+fi
 log_trace "Resolved selected vars"
 
 # Rebase (or not) image
@@ -588,6 +597,16 @@ if [ "$DEW_MOUNT" -ge "0" ]; then
         -v "$(bindmount "$mntdir")" \
         -w "$(pwd)" \
         "$@"
+fi
+
+# Adding mounts collected from options or DEW_MOUNTS
+if [ -n "$DEW_MOUNTS" ]; then
+  for m in $DEW_MOUNTS; do
+    src=$(printf %s\\n "$m"|awk -F: '{printf $1}')
+    dst=$(printf %s\\n "$m"|awk -F: '{printf $2}')
+    opt=$(printf %s\\n "$m"|awk -F: '{printf $3}')
+    set -- -v "$(bindmount "$src" "$dst" "$opt")" "$@"
+  done
 fi
 
 # When impersonating pass all environment variables that should be to the

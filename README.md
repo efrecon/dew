@@ -282,16 +282,16 @@ container at its creation (the `COMMAND` from a Dockerfile). Pass the option
 Provided the first argument after the (optional) `--` is `XXX`, it will be
 understood as follows:
 
-- If a file called `Dockerfile.XXX`, or `XXX.Dockerfile`, or `XXX.df` is found
++ If a file called `Dockerfile.XXX`, or `XXX.Dockerfile`, or `XXX.df` is found
   under the configuration path `DEW_CONFIG_PATH`, that file will be used to
   build a local Docker image called `github.com/efrecon/dew/XXX` -- the prefix
   is actually controlled by `DEW_NAMESPACE`. `dew` will rebuild a new image only
   whenever a change has been detected on the Dockerfile.
-- If a file called `XXX` or `XXX.env` is found under the configuration path
++ If a file called `XXX` or `XXX.env` is found under the configuration path
   `DEW_CONFIG_PATH`, that file will be used to set any of the environment
   variables described below. Note that it is possible to combine this behaviour
   with the Dockerfile behaviour above.
-- If none of the above was true, `XXX` is understood as the name of a local or
++ If none of the above was true, `XXX` is understood as the name of a local or
   remote Docker image.
 
 ## Environment Variables
@@ -335,7 +335,7 @@ container will run under a user with the same user and group identifiers as the
 ones of the calling user. In addition, in interactive containers, the user
 inside the container will be given the same `HOME` directory as the original
 user, albeit empty (except perhaps for the current path, see
-[`DEW_MOUNT`](#dewmount)). Impersonation works by running the container as
+[`DEW_MOUNT`](#dew_mount)). Impersonation works by running the container as
 `root`, but injecting an impersonation script that will setup a minimal
 environment inside the container before becoming to relevant user and group.
 
@@ -382,6 +382,25 @@ other words:
   the container, and makes the current directory the working directory. This
   enables the container to access all files and directories contained in the
   parent directory.
+
+### `DEW_MOUNTS`
+
+This variable should contain a space-separated list of bindmount specifications,
+from the host into the container. Each specification is modelled after the `-v`
+[option][mount-vol] of the Docker client. Mount specifications are separated by
+the colon `:` sign and will contain in order:
+
++ The source directory on the host.
++ The destination directory into the container. When empty, this will
+  automatically be initialised the the same as the source directory on the host.
++ A list of options, blindly passed to the `-v` option. When running with
+  `podman`, the `Z` option will automatically be added.
+
+Note that in the content of this variable, any string named after one of the
+documented [variables](#variables-accessible-to-resolution), but surrounded by
+`%`, e.g. `%DEW_SHELL%`, will be replaced by the value of that variable.
+
+  [mount-vol]: https://docs.docker.com/reference/cli/docker/container/run/#volume
 
 ### `DEW_OPTS`
 
@@ -489,7 +508,7 @@ documented [variables](#variables-accessible-to-resolution), but surrounded by
 ### `DEW_INJECT_ARGS`
 
 This variable contains arguments that are blindly passed to the
-[injected](#dewinject) command at the time of image creation. This facilitates
+[injected](#dew_inject) command at the time of image creation. This facilitates
 the reuse of the same injected command, with varying arguments. You could, for
 example, reuse a command that performs generic package installation and give it
 varying packages for the implementation of a container.
@@ -528,7 +547,7 @@ evicted from the cache. The default is 41 days.
 ## Variables Accessible to Resolution
 
 The variables accessible are all the variables starting with `DEW_` and
-described in the section [above][#environment-variables]. In addition, it is
+described in the section [above](#environment-variables). In addition, it is
 possible to use, when relevant:
 
 + `DEW_CONFIGDIR`: The directory hosting the `.env` configuration file.
@@ -591,3 +610,8 @@ to be installed on the host system.
 For a short time period, `dew` supported a `DEW_NETWORK` environment variable
 (and corresponding `--network` option). This has been removed in favour of the
 `DEW_FEATURES` environment variable.
+
+A number of `.env` files contain references to `DEW_OPTS` for mounting extra
+directories/files into the container. It is usually a better idea to use the
+`DEW_MOUNTS` variable instead, as it will be aware of the differences between
+`docker` and `podman`.
