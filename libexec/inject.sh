@@ -77,7 +77,7 @@ inject() {
     # Create a container, with the injection script as an entrypoint. Let it run
     # until it exits. Once done, use the stopped container to generate a new
     # image, then remove the (temporary) container entirely.
-    log_info "Injecting $injector $injector_args into $DEW_IMAGE, generating local image for future runs"
+    log_info "Injecting $injector $injector_args into $DEW_IMAGE, generating local image for future runs."
     "${DEW_RUNTIME}" run \
       -u 0 \
       -v "$(bindmount "$(dirname "$injector")" "" ro)" \

@@ -763,10 +763,12 @@ fi
 
 # Trace the entire set of variables that were used for taking decisions,
 # together with the Docker command that we are going to execute.
-set | grep "^DEW_" | while IFS= read -r line; do
-  log_trace "$line"
-done
-log_trace "Running: $*"
+if at_verbosity trace; then
+  set | grep "^DEW_" | while IFS= read -r line; do
+    log_trace "$line"
+  done
+  log_trace "Running: $*"
+fi
 
 # Remove all temporary XDG stuff. Done here to avoid sub-shell exiting to
 # trigger cleanup.
